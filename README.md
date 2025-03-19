@@ -20,19 +20,27 @@ Araknid transforms traditional C programming into an engaging visual experience!
 
 ### Visual Blocks for "Hello World"
 Transform complex coding concepts into simple visual blocks - here's the classic "Hello World" program!
-![Blocks for Hello World](./resources/screenshots/1.png)
+<div style="padding-top: 20px; padding-bottom: 20px;">
+  <img src="./resources/screenshots/1.png" alt="Blocks for Hello World" />
+</div>
 
 ### Generated C Code
 Watch as Araknid automatically generates clean, readable C code from your blocks.
-![Generated C Code](./resources/screenshots/2.png)
+<div style="padding-top: 20px; padding-bottom: 20px;">
+  <img src="./resources/screenshots/2.png" alt="Generated C Code" />
+</div>
 
 ### Full Application Window
 Explore the elegant, intuitive interface designed to make programming accessible for everyone.
-![Full Application Window](./resources/screenshots/3.png)
+<div style="padding-top: 20px; padding-bottom: 20px;">
+  <img src="./resources/screenshots/3.png" alt="Full Application Window" />
+</div>
 
 ### Block Building in Action
 See how easy it is to build programs by connecting blocks together!
-![Placing Blocks](./resources/screenshots/4.gif)
+<div style="padding-top: 20px; padding-bottom: 20px;">
+  <img src="./resources/screenshots/4.gif" alt="Placing Blocks" />
+</div>
 
 ## 🚀 Getting Started
 
