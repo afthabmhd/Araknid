@@ -1,6 +1,7 @@
 from PyQt5.QtWidgets import (QGraphicsView, QGraphicsScene, QWidget, 
                             QVBoxLayout, QGraphicsRectItem, QMenu, QGraphicsProxyWidget,
-                            QGraphicsEllipseItem, QFrame, QLabel, QHBoxLayout, QPushButton)
+                            QGraphicsEllipseItem, QFrame, QLabel, QHBoxLayout, QPushButton,
+                            QLineEdit, QTextEdit, QPlainTextEdit, QApplication)
 from PyQt5.QtCore import Qt, pyqtSignal, QPointF, QEvent
 from PyQt5.QtGui import QPainter, QColor, QPen, QBrush, QLinearGradient, QFont, QIcon
 
@@ -348,10 +349,6 @@ class InfiniteCanvasView(QGraphicsView):
         self._panning = False
         self._pan_start_pos = None
         
-        # Enable drag mode when holding spacebar
-        self._space_pressed = False
-        self._prev_drag_mode = None
-        
         # Set a nice transition effect for smoother zooming
         self.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
         self.setResizeAnchor(QGraphicsView.AnchorUnderMouse)
@@ -454,14 +451,15 @@ class InfiniteCanvasView(QGraphicsView):
         if item and isinstance(item, QGraphicsProxyWidget):
             # Forward the event to the item
             super().mousePressEvent(event)
-        elif item and isinstance(item.parentItem(), Block):
+        elif item and hasattr(item, 'parentItem') and item.parentItem() and isinstance(item.parentItem(), Block):
             # The click is on a block, check if it contains input fields
             block = item.parentItem()
-            for proxy in block.proxies.values():
-                if proxy.contains(proxy.mapFromScene(self.mapToScene(event.pos()))):
-                    # Forward the event to the proxy
-                    super().mousePressEvent(event)
-                    return
+            if hasattr(block, 'proxies'):
+                for proxy in block.proxies.values():
+                    if proxy.contains(proxy.mapFromScene(self.mapToScene(event.pos()))):
+                        # Forward the event to the proxy
+                        super().mousePressEvent(event)
+                        return
                 
             # Not on an input field, handle normally
             super().mousePressEvent(event)
@@ -501,28 +499,13 @@ class InfiniteCanvasView(QGraphicsView):
         super().mouseReleaseEvent(event)
     
     def keyPressEvent(self, event):
-        """Handle key press events - Flyde style shortcuts"""
-        # Space for temporary dragging mode
-        if event.key() == Qt.Key_Space:
-            self._space_pressed = True
-            self._prev_drag_mode = self.dragMode()
-            self.setDragMode(QGraphicsView.ScrollHandDrag)
-            self.setCursor(Qt.OpenHandCursor)
-            event.accept()
-            return
-        
+        """Handle key press events - simplified without spacebar drag"""
+        # Just pass the event to the parent class
         super().keyPressEvent(event)
     
     def keyReleaseEvent(self, event):
-        """Handle key release events"""
-        if event.key() == Qt.Key_Space:
-            self._space_pressed = False
-            if self._prev_drag_mode is not None:
-                self.setDragMode(self._prev_drag_mode)
-            self.setCursor(Qt.ArrowCursor)
-            event.accept()
-            return
-            
+        """Handle key release events - simplified without spacebar drag"""
+        # Just pass the event to the parent class
         super().keyReleaseEvent(event)
     
     def _expand_scene_if_needed(self, pos):
