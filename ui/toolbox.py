@@ -25,6 +25,7 @@ class BlockButton(QPushButton):
         super().__init__(parent)
         self.block_class = block_class
         self.category_color = category_color
+        self.block_name = block_name
         
         # Set button text and appearance - Flyde style
         self.setText(block_name)
@@ -101,6 +102,10 @@ class Toolbox(QWidget):
             Block.ALGORITHM: QColor("#8254d8")     # BlueViolet (Algorithms)
         }
         
+        # Store all block buttons for search functionality
+        self.block_buttons = []
+        self.category_frames = []
+        
         # Setup UI
         self._setup_ui()
         
@@ -129,16 +134,16 @@ class Toolbox(QWidget):
         
         layout.addWidget(header)
         
-        # Search box - Flyde style
+    # Search box - Flyde style
         search_frame = QFrame()
         search_frame.setStyleSheet("background-color: #252526;")
         search_frame.setFixedHeight(50)
         search_layout = QHBoxLayout(search_frame)
         search_layout.setContentsMargins(16, 8, 16, 8)
         
-        search_box = QLineEdit()
-        search_box.setPlaceholderText("Search nodes...")
-        search_box.setStyleSheet("""
+        self.search_box = QLineEdit()
+        self.search_box.setPlaceholderText("Search nodes...")
+        self.search_box.setStyleSheet("""
             QLineEdit {
                 background-color: #3c3c3c;
                 color: #ffffff;
@@ -147,15 +152,17 @@ class Toolbox(QWidget):
                 padding: 6px 10px;
             }
         """)
-        search_layout.addWidget(search_box)
+        # Connect search box to filter function
+        self.search_box.textChanged.connect(self._filter_blocks)
+        search_layout.addWidget(self.search_box)
         
         layout.addWidget(search_frame)
         
         # Create scrollable container
-        scroll_area = QScrollArea()
-        scroll_area.setWidgetResizable(True)
-        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        scroll_area.setStyleSheet("""
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.scroll_area.setStyleSheet("""
             QScrollArea {
                 background-color: #252526;
                 border: none;
@@ -176,20 +183,20 @@ class Toolbox(QWidget):
         """)
         
         # Create container widget for categories
-        container = QWidget()
-        container.setStyleSheet("background-color: #252526;")
-        container_layout = QVBoxLayout(container)
-        container_layout.setContentsMargins(8, 8, 8, 8)
-        container_layout.setSpacing(12)
+        self.container = QWidget()
+        self.container.setStyleSheet("background-color: #252526;")
+        self.container_layout = QVBoxLayout(self.container)
+        self.container_layout.setContentsMargins(8, 8, 8, 8)
+        self.container_layout.setSpacing(12)
         
         # Add block categories
-        self._add_category_section(container_layout, "VARIABLES", Block.VARIABLE, [
+        self._add_category_section(self.container_layout, "VARIABLES", Block.VARIABLE, [
             (VariableDeclarationBlock, "Variable Declaration"),
             (VariableAssignmentBlock, "Variable Assignment"),
             (ArrayDeclarationBlock, "Array Declaration")
         ])
         
-        self._add_category_section(container_layout, "CONTROL FLOW", Block.CONTROL, [
+        self._add_category_section(self.container_layout, "CONTROL FLOW", Block.CONTROL, [
             (IfBlock, "If"),
             (ElseBlock, "Else"),
             (ForLoopBlock, "For Loop"),
@@ -198,14 +205,14 @@ class Toolbox(QWidget):
             (ContinueBlock, "Continue")
         ])
         
-        self._add_category_section(container_layout, "INPUT/OUTPUT", Block.IO, [
+        self._add_category_section(self.container_layout, "INPUT/OUTPUT", Block.IO, [
             (PrintBlock, "Print"),
             (ScanBlock, "Input"),
             (PrintStringBlock, "Print String"),
             (PrintfNewlineBlock, "Print Newline")
         ])
         
-        self._add_category_section(container_layout, "OPERATORS", Block.OPERATOR, [
+        self._add_category_section(self.container_layout, "OPERATORS", Block.OPERATOR, [
             (OperatorBlock, "Operator"),
             (LogicalOperatorBlock, "Logical Operator"),
             (AssignmentOperatorBlock, "Assignment"),
@@ -214,23 +221,23 @@ class Toolbox(QWidget):
             (TernaryOperatorBlock, "Ternary")
         ])
         
-        self._add_category_section(container_layout, "FUNCTIONS", Block.FUNCTION, [
+        self._add_category_section(self.container_layout, "FUNCTIONS", Block.FUNCTION, [
             (FunctionDeclarationBlock, "Function Declaration"),
             (FunctionCallBlock, "Function Call"),
             (ReturnBlock, "Return"),
             (MainFunctionBlock, "Main Function")
         ])
         
-        self._add_category_section(container_layout, "INCLUDES", Block.VARIABLE, [
+        self._add_category_section(self.container_layout, "INCLUDES", Block.VARIABLE, [
             (IncludeBlock, "Include")
         ])
         
         # Add spacer at bottom for aesthetics
-        container_layout.addStretch()
+        self.container_layout.addStretch()
         
         # Add container to scroll area
-        scroll_area.setWidget(container)
-        layout.addWidget(scroll_area)
+        self.scroll_area.setWidget(self.container)
+        layout.addWidget(self.scroll_area)
         
     def _add_category_section(self, parent_layout, title, category, blocks):
         """Add a category section with blocks - Flyde style"""
@@ -248,6 +255,9 @@ class Toolbox(QWidget):
         category_layout = QVBoxLayout(category_frame)
         category_layout.setContentsMargins(0, 0, 0, 0)
         category_layout.setSpacing(0)
+        
+        # Store the category frame for search filtering
+        self.category_frames.append((category_frame, title.lower()))
         
         # Category header
         header = QFrame()
@@ -300,6 +310,9 @@ class Toolbox(QWidget):
             button = BlockButton(block_class, block_name, color)
             button.clicked.connect(lambda checked, cls=block_class: self._create_block(cls))
             blocks_layout.addWidget(button)
+            
+            # Store the button for search filtering
+            self.block_buttons.append((button, block_name.lower(), title.lower()))
         
         category_layout.addWidget(blocks_container)
         parent_layout.addWidget(category_frame)
@@ -317,6 +330,39 @@ class Toolbox(QWidget):
             
             # Add to canvas
             parent.canvas.add_block(block)
+    
+    def _filter_blocks(self, search_text):
+        """Filter blocks based on search text"""
+        search_text = search_text.lower().strip()
+        
+        if not search_text:
+            # If search is empty, show all blocks and categories
+            for button, _, _ in self.block_buttons:
+                button.setVisible(True)
+                
+            for frame, _ in self.category_frames:
+                frame.setVisible(True)
+                
+            return
+            
+        # Hide all category frames initially
+        for frame, _ in self.category_frames:
+            frame.setVisible(False)
+            
+        # Show only blocks that match the search and their categories
+        visible_categories = set()
+        
+        for button, block_name, category_name in self.block_buttons:
+            if search_text in block_name or search_text in category_name:
+                button.setVisible(True)
+                visible_categories.add(category_name)
+            else:
+                button.setVisible(False)
+                
+        # Show categories that have visible blocks
+        for frame, category_name in self.category_frames:
+            if category_name in visible_categories:
+                frame.setVisible(True)
     
     def highlight_block_category(self, block):
         """Highlight the category in the toolbox based on the selected block"""
