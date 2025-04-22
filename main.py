@@ -1,18 +1,24 @@
 import sys
-from PyQt5.QtWidgets import QApplication, QMainWindow, QSplitter, QFileDialog, QAction, QMessageBox
-from PyQt5.QtCore import Qt, QSettings
+import os
+import time
+import json
+from PyQt5.QtWidgets import (QApplication, QMainWindow, QSplitter, QFileDialog, QAction, QMessageBox,
+                           QTabWidget, QMenu, QLabel, QStatusBar)
+from PyQt5.QtCore import Qt, QSettings, QTimer
 from PyQt5.QtGui import QIcon, QFont
 
 from ui.canvas import BlockCanvas
 from ui.code_view import CodeView
 from ui.toolbox import Toolbox
+from ui.compiler_panel import CompilerPanel
 from core.block_manager import BlockManager
 from core.code_generator import CodeGenerator
 from core.file_manager import FileManager
+from core.compiler import CompilerManager
 
 
 class MainWindow(QMainWindow):
-    """Main window for Araknid with Flyde-style UI"""
+    """Main window for Araknid with Flyde-style UI and integrated compiler"""
     
     def __init__(self):
         super().__init__()
@@ -25,6 +31,10 @@ class MainWindow(QMainWindow):
         self.block_manager = BlockManager()
         self.code_generator = CodeGenerator()
         self.file_manager = FileManager()
+        self.compiler_manager = CompilerManager()
+        
+        # Track last modification time for detecting unsaved changes
+        self.last_modified_time = time.time()
         
         # Setup UI
         self._setup_ui()
@@ -47,7 +57,7 @@ class MainWindow(QMainWindow):
         self.toolbox.setFixedWidth(280)  # Fixed width for toolbox panel
         self.main_splitter.addWidget(self.toolbox)
         
-        # Create right panel splitter (canvas and code view)
+        # Create right panel splitter (canvas and output panels)
         self.right_splitter = QSplitter(Qt.Vertical)
         self.main_splitter.addWidget(self.right_splitter)
         
@@ -55,9 +65,49 @@ class MainWindow(QMainWindow):
         self.canvas = BlockCanvas(self.block_manager, self.code_generator)
         self.right_splitter.addWidget(self.canvas)
         
+        # Create output tab widget to contain code view and compiler panel
+        self.output_tabs = QTabWidget()
+        self.output_tabs.setStyleSheet("""
+            QTabWidget {
+                background-color: #1e1e1e;
+                border: none;
+            }
+            QTabWidget::pane {
+                background-color: #1e1e1e;
+                border: none;
+            }
+            QTabBar::tab {
+                background-color: #2d2d2d;
+                color: #d4d4d4;
+                border: none;
+                padding: 6px 15px;
+                margin-right: 2px;
+                font-size: 10pt;
+                min-width: 120px;  /* Increased minimum width for tabs */
+                max-width: 200px;  /* Maximum width to prevent too wide tabs */
+            }
+            QTabBar::tab:selected {
+                background-color: #1e1e1e;
+                border-top: 2px solid #0078d7;
+            }
+            QTabBar::tab:hover:!selected {
+                background-color: #3d3d3d;
+            }
+        """)
+        
+        # Make tabs expand to fill available space
+        self.output_tabs.tabBar().setExpanding(True)
+        
         # Create code view
         self.code_view = CodeView()
-        self.right_splitter.addWidget(self.code_view)
+        self.output_tabs.addTab(self.code_view, "Generated Code")
+        
+        # Create compiler panel
+        self.compiler_panel = CompilerPanel(self.compiler_manager)
+        self.output_tabs.addTab(self.compiler_panel, "Compiler")
+        
+        # Add output tabs to the right splitter
+        self.right_splitter.addWidget(self.output_tabs)
         
         # Set initial splitter sizes
         self.main_splitter.setSizes([280, 1120])  # Adjusted for new fixed toolbox width
@@ -112,24 +162,6 @@ class MainWindow(QMainWindow):
         new_action.setShortcut("Ctrl+N")
         new_action.triggered.connect(self._new_project)
         file_menu.addAction(new_action)
-        
-        # Open action
-        open_action = QAction("&Open", self)
-        open_action.setShortcut("Ctrl+O")
-        open_action.triggered.connect(self._open_project)
-        file_menu.addAction(open_action)
-        
-        # Save action
-        save_action = QAction("&Save", self)
-        save_action.setShortcut("Ctrl+S")
-        save_action.triggered.connect(self._save_project)
-        file_menu.addAction(save_action)
-        
-        # Save As action
-        save_as_action = QAction("Save &As...", self)
-        save_as_action.setShortcut("Ctrl+Shift+S")
-        save_as_action.triggered.connect(self._save_project_as)
-        file_menu.addAction(save_as_action)
         
         file_menu.addSeparator()
         
@@ -191,6 +223,34 @@ class MainWindow(QMainWindow):
         reset_zoom_action.triggered.connect(self.canvas.reset_zoom)
         view_menu.addAction(reset_zoom_action)
         
+        # Compiler menu
+        compiler_menu = menubar.addMenu("&Compiler")
+        
+        # Compile action
+        compile_action = QAction("&Compile", self)
+        compile_action.setShortcut("F5")
+        compile_action.triggered.connect(self._compile_code)
+        compiler_menu.addAction(compile_action)
+        
+        # Run action
+        run_action = QAction("&Run", self)
+        run_action.setShortcut("F6")
+        run_action.triggered.connect(self._run_code)
+        compiler_menu.addAction(run_action)
+        
+        # Stop action
+        stop_action = QAction("&Stop", self)
+        stop_action.setShortcut("F7")
+        stop_action.triggered.connect(self._stop_code)
+        compiler_menu.addAction(stop_action)
+        
+        compiler_menu.addSeparator()
+        
+        # Show compiler panel action
+        show_compiler_action = QAction("Show &Compiler Panel", self)
+        show_compiler_action.triggered.connect(self._show_compiler_panel)
+        compiler_menu.addAction(show_compiler_action)
+        
         # Help menu
         help_menu = menubar.addMenu("&Help")
         
@@ -218,6 +278,14 @@ class MainWindow(QMainWindow):
             QSplitter::handle:vertical {
                 height: 2px;
             }
+            QStatusBar {
+                background-color: #2d2d2d;
+                color: #e0e0e0;
+                border-top: 1px solid #333333;
+            }
+            QLabel {
+                color: #e0e0e0;
+            }
         """)
         
     def _update_code(self):
@@ -225,57 +293,21 @@ class MainWindow(QMainWindow):
         code = self.code_generator.generate_code(self.block_manager.get_root_blocks())
         self.code_view.set_code(code)
         
+        # Update compiler panel's access to the latest code
+        if hasattr(self, 'compiler_panel') and hasattr(self.compiler_panel, 'latest_code'):
+            self.compiler_panel.latest_code = code
+            
+        # Update last modified time
+        self.last_modified_time = time.time()
+        
     def _new_project(self):
         """Create a new project"""
-        reply = QMessageBox.question(self, "New Project", 
-                                    "Are you sure you want to start a new project? Unsaved changes will be lost.",
-                                    QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
-        
-        if reply == QMessageBox.Yes:
-            self.canvas.clear()
-            self.code_view.clear()
-            self.file_manager.current_file = None
-            self.setWindowTitle("Araknid - Visual Block-Based C Programming")
-            
-    def _open_project(self):
-        """Open an existing project"""
-        filename, _ = QFileDialog.getOpenFileName(self, "Open Project", "", 
-                                                "Araknid Project Files (*.ark);;All Files (*)")
-        
-        if filename:
-            try:
-                blocks = self.file_manager.load_project(filename)
-                self.block_manager.set_blocks(blocks)
-                self.canvas.load_blocks(blocks)
-                self._update_code()
-                
-                self.setWindowTitle(f"Araknid - {filename}")
-            except Exception as e:
-                QMessageBox.critical(self, "Error", f"Failed to open project: {str(e)}")
-                
-    def _save_project(self):
-        """Save the current project"""
-        if self.file_manager.current_file:
-            self._save_to_file(self.file_manager.current_file)
-        else:
-            self._save_project_as()
-            
-    def _save_project_as(self):
-        """Save the current project to a new file"""
-        filename, _ = QFileDialog.getSaveFileName(self, "Save Project", "", 
-                                                "Araknid Project Files (*.ark);;All Files (*)")
-        
-        if filename:
-            self._save_to_file(filename)
-            
-    def _save_to_file(self, filename):
-        """Save the project to the specified file"""
-        try:
-            blocks = self.block_manager.get_all_blocks()
-            self.file_manager.save_project(filename, blocks)
-            self.setWindowTitle(f"Araknid - {filename}")
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to save project: {str(e)}")
+        # Create new project
+        self.canvas.clear()
+        self.code_view.clear()
+        self.file_manager.current_file = None
+        self.setWindowTitle("Araknid - Visual Block-Based C Programming")
+        self.last_modified_time = time.time()
             
     def _export_code(self):
         """Export the generated C code to a file"""
@@ -283,14 +315,11 @@ class MainWindow(QMainWindow):
                                                 "C Source Files (*.c);;All Files (*)")
         
         if filename:
-            try:
-                code = self.code_generator.generate_code(self.block_manager.get_root_blocks())
-                self.file_manager.export_code(filename, code)
-                
+            code = self.code_generator.generate_code(self.block_manager.get_root_blocks())
+            
+            if self.file_manager.export_code(filename, code):
                 QMessageBox.information(self, "Export Successful", 
                                        f"Code exported successfully to {filename}")
-            except Exception as e:
-                QMessageBox.critical(self, "Error", f"Failed to export code: {str(e)}")
                 
     def _show_about(self):
         """Show the about dialog - Flyde style"""
@@ -300,6 +329,7 @@ class MainWindow(QMainWindow):
         about_box.setInformativeText(
             "<p>A modern, Flyde-inspired block-based C programming environment for learning algorithms.</p>"
             "<p>Created with PyQt5.</p>"
+            "<p>Integrated with GCC compiler for immediate code execution.</p>"
         )
         about_box.setStandardButtons(QMessageBox.Ok)
         
@@ -325,6 +355,38 @@ class MainWindow(QMainWindow):
         """)
         
         about_box.exec_()
+        
+    def _compile_code(self):
+        """Compile the current code"""
+        # Switch to the compiler tab
+        self.output_tabs.setCurrentWidget(self.compiler_panel)
+        
+        # Trigger compile action in the compiler panel
+        if hasattr(self.compiler_panel, '_compile_current_code'):
+            self.compiler_panel._compile_current_code()
+            
+    def _run_code(self):
+        """Run the compiled code"""
+        # Switch to the compiler tab
+        self.output_tabs.setCurrentWidget(self.compiler_panel)
+        
+        # Trigger run action in the compiler panel
+        if hasattr(self.compiler_panel, '_run_compiled_code'):
+            self.compiler_panel._run_compiled_code()
+            
+    def _stop_code(self):
+        """Stop the running code"""
+        # Switch to the compiler tab
+        self.output_tabs.setCurrentWidget(self.compiler_panel)
+        
+        # Trigger stop action in the compiler panel
+        if hasattr(self.compiler_panel, '_stop_running_program'):
+            self.compiler_panel._stop_running_program()
+            
+    def _show_compiler_panel(self):
+        """Show the compiler panel"""
+        # Switch to the compiler tab
+        self.output_tabs.setCurrentWidget(self.compiler_panel)
         
     def _load_settings(self):
         """Load application settings"""
@@ -355,6 +417,11 @@ class MainWindow(QMainWindow):
                 right_sizes = [int(size) for size in right_sizes]
             self.right_splitter.setSizes(right_sizes)
             
+        # Restore last active tab
+        tab_index = settings.value("outputTabIndex")
+        if tab_index is not None:
+            self.output_tabs.setCurrentIndex(int(tab_index))
+            
     def _save_settings(self):
         """Save application settings"""
         settings = QSettings("Araknid", "Araknid")
@@ -367,8 +434,15 @@ class MainWindow(QMainWindow):
         settings.setValue("mainSplitter", self.main_splitter.sizes())
         settings.setValue("rightSplitter", self.right_splitter.sizes())
         
+        # Save current tab index
+        settings.setValue("outputTabIndex", self.output_tabs.currentIndex())
+        
     def closeEvent(self, event):
         """Handle application close event"""
+        # Clean up the compiler manager
+        if hasattr(self, 'compiler_manager'):
+            self.compiler_manager.cleanup()
+            
         self._save_settings()
         event.accept()
 
@@ -382,5 +456,10 @@ if __name__ == "__main__":
     # Create and show the main window
     window = MainWindow()
     window.show()
+    
+    # Display a welcome message on the compiler panel
+    if hasattr(window, 'compiler_panel') and hasattr(window.compiler_panel, 'console'):
+        window.compiler_panel.console.append_info("Welcome to Araknid C Programming Environment!\n")
+        window.compiler_panel.console.append_info("Create blocks in the canvas, then use this panel to compile and run your code.\n")
     
     sys.exit(app.exec_())
