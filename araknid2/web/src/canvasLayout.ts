@@ -14,7 +14,7 @@ export const CARD_W = 210;
 export const CARD_H = 62;
 const GAP = 10;
 const FRAME_PAD = 14;
-const FRAME_HEAD = 34;
+const FRAME_HEAD = 44;
 export const STUB_W = 180;
 export const STUB_H = 44;
 
@@ -96,7 +96,7 @@ export async function layoutLevel(v: LevelView): Promise<LevelLayout> {
       if (g) {
         nodes.push({
           id,
-          layoutOptions: { ...SPACING, "elk.padding": `[top=${FRAME_HEAD},left=${FRAME_PAD},bottom=${FRAME_PAD},right=${FRAME_PAD}]` },
+          layoutOptions: { ...SPACING, "elk.padding": `[top=${FRAME_HEAD},left=${FRAME_PAD},bottom=${FRAME_PAD},right=${FRAME_PAD}]`, "elk.nodeSize.constraints": "MINIMUM_SIZE", "elk.nodeSize.minimum": "(300, 0)" },
           children: childrenOf(g.cards, g.id),
         });
       } else if (id.startsWith("out:")) nodes.push({ id, width: STUB_W, height: STUB_H });

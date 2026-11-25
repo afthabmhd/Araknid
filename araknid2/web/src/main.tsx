@@ -2,6 +2,7 @@ import { StrictMode, useCallback, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import "@xyflow/react/dist/style.css";
 import "./styles.css";
+import "./theme.css";
 import { api, STATIC } from "./api";
 import { ImportScreen } from "./ImportScreen";
 import { ProjectView } from "./ProjectView";

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  Controls, MarkerType, ReactFlow, ReactFlowProvider, useReactFlow,
+  Background, BackgroundVariant, Controls, MarkerType, ReactFlow, ReactFlowProvider, useReactFlow,
   type Edge as RFEdge, type Node as RFNode,
 } from "@xyflow/react";
 import ELK from "elkjs/lib/elk.bundled.js";
@@ -60,6 +60,7 @@ function Inner({ graph, onBack, onRemap }: { graph: GraphData; onBack: () => voi
     try { return localStorage.getItem("araknid.openMode") === "all" ? "all" : "one"; } catch { return "one"; }
   });
   const setOpenMode = (m: "one" | "all") => {
+    tweenNext.current = true;
     setOpenModeState(m);
     setExpanded(null);
     try { localStorage.setItem("araknid.openMode", m); } catch { /* private mode */ }
@@ -89,7 +90,32 @@ function Inner({ graph, onBack, onRemap }: { graph: GraphData; onBack: () => voi
   const trace = useMemo(() => (top.kind === "trace" ? buildTrace(ix, top.id, filters) : null), [ix, top, filters]);
 
   // ------------------------------------------------------------- actions
-  const drill = useCallback((b: Block) => {
+  // ------------------------------------------------------------- motion
+  // Going into a block: the camera zooms onto its card while the canvas fades,
+  // then the inside grows in from small. Coming back out does the reverse.
+  const reduced = useMemo(() => { try { return matchMedia("(prefers-reduced-motion: reduce)").matches; } catch { return false; } }, []);
+  const canvasRef = useRef<HTMLDivElement>(null);
+  const [leaving, setLeaving] = useState<string | false>(false); // node id being zoomed into, or "" for a plain fade
+  const enter = useRef<"in" | "out" | null>(null);
+  const tweenNext = useRef(false); // animate the next layout change in place (open/close a block, slider)
+  const nodeFor = useCallback((blockId: string) => rf.getNodes().find((n) => {
+    const d = n.data as { card?: { block?: Block }; group?: { block: Block }; block?: Block; stub?: { block: Block } };
+    return n.id === blockId || d.card?.block?.id === blockId || d.group?.block.id === blockId || d.block?.id === blockId;
+  }), [rf]);
+  const flyInto = useCallback((blockId: string, then: () => void) => {
+    const n = nodeFor(blockId);
+    if (reduced || !n) { enter.current = "in"; then(); return; }
+    rf.fitBounds(rf.getNodesBounds([n]), { duration: 360, padding: 0.25 });
+    setLeaving(n.id);
+    window.setTimeout(() => { enter.current = "in"; then(); setLeaving(false); }, 340);
+  }, [nodeFor, reduced, rf]);
+  const backOut = useCallback((then: () => void) => {
+    if (reduced) { then(); return; }
+    setLeaving("");
+    window.setTimeout(() => { enter.current = "out"; then(); setLeaving(false); }, 160);
+  }, [reduced]);
+
+  const drillNow = useCallback((b: Block) => {
     if (["function", "method", "component"].includes(b.kind) && b.start_byte != null && b.file) {
       const item: InsideBlock = {
         id: b.id, level: 4, kind: "definition", node_type: b.kind, label: b.code_name, file: b.file,
@@ -105,12 +131,14 @@ function Inner({ graph, onBack, onRemap }: { graph: GraphData; onBack: () => voi
     setSelected(null);
     setHovered(null);
   }, []);
+  const drill = useCallback((b: Block) => flyInto(b.id, () => drillNow(b)), [flyInto, drillNow]);
 
-  const traceBlock = useCallback((b: Block) => {
+  const traceNow = useCallback((b: Block) => {
     setCrumbs((c) => [...c.filter((x) => x.kind !== "trace" && x.kind !== "inside"), { kind: "trace", id: b.id }]);
     setSelected(b.id);
     setHovered(null);
   }, []);
+  const traceBlock = useCallback((b: Block) => flyInto(b.id, () => traceNow(b)), [flyInto, traceNow]);
 
   const drillInside = useCallback((ib: InsideBlock) => {
     setCrumbs((c) => [...c, { kind: "inside", item: ib, title: ib.kind === "section" ? ib.label : ib.node_type.replace(/_/g, " ") }]);
@@ -130,12 +158,13 @@ function Inner({ graph, onBack, onRemap }: { graph: GraphData; onBack: () => voi
     hover: (id) => setHovered(id),
     toggleOpen: (b) => {
       if (openMode === "one" && visibleChildren(ix, b, filters).length > 0) {
+        tweenNext.current = true;
         setExpanded((cur) => (cur === b.id ? null : b.id));
       } else drill(b);
     },
     expanded: openMode === "one" ? expanded : null,
     drill,
-    showAll: (owner) => setShowAll((s) => ({ ...s, [owner]: true })),
+    showAll: (owner) => { tweenNext.current = true; setShowAll((s) => ({ ...s, [owner]: true })); },
     drillInside,
   }), [drill, drillInside, traceBlock, openMode, expanded, ix, filters]);
 
@@ -150,7 +179,7 @@ function Inner({ graph, onBack, onRemap }: { graph: GraphData; onBack: () => voi
       const put = (id: string, type: string, box: Box, data: Record<string, unknown>, z = 1) =>
         nodes.push({
           id, type, data, position: { x: box.x, y: box.y }, parentId: box.parent,
-          style: { width: box.w, height: box.h, ...pe }, draggable: false, selectable: false, zIndex: z,
+          style: { width: box.w, height: box.h, ...pe, ...stagger(nodes.length) }, draggable: false, selectable: false, zIndex: z,
         });
       for (const g of view.groups) {
         const gb = boxes.get(g.id);
@@ -203,7 +232,7 @@ function Inner({ graph, onBack, onRemap }: { graph: GraphData; onBack: () => voi
           const b = boxes.get(id)!;
           nodes.push({
             id, type: "card", parentId: gid, data: { card: { id: it.block.id, block: it.block, chain: [it.block], group: gid } },
-            position: { x: b.x, y: b.y }, style: { width: b.w, height: b.h, ...pe }, draggable: false, selectable: false, zIndex: 1,
+            position: { x: b.x, y: b.y }, style: { width: b.w, height: b.h, ...pe, ...stagger(nodes.length) }, draggable: false, selectable: false, zIndex: 1,
           });
           const kind = it.kinds[0];
           edges.push({
@@ -265,11 +294,71 @@ function Inner({ graph, onBack, onRemap }: { graph: GraphData; onBack: () => voi
     return () => { live = false; };
   }, [mode, insideData]);
 
+  // ------------------------------------------------------------- in-place moves
+  // Opening a block in place, closing it, or moving the slider: cards glide to
+  // their new spots, an opened card grows into its frame, and new cards come
+  // out of the block that holds them. Lines fade back in once things settle.
+  const [shown, setShown] = useState<typeof base>(base);
+  const prevBoxes = useRef(new Map<string, Box>());
+  const tweening = useRef(false);
+  const [linesIn, setLinesIn] = useState(false);
+  useEffect(() => {
+    const now = absBoxes(base.nodes);
+    const before = prevBoxes.current;
+    prevBoxes.current = now;
+    const go = tweenNext.current && !reduced && mode === "level" && base.nodes.some((n) => before.has(n.id));
+    tweenNext.current = false;
+    if (!go) { setShown(base); return; }
+    const parentOf = new Map(base.nodes.map((n) => [n.id, n.parentId]));
+    const from = new Map<string, Box>();
+    for (const n of base.nodes) {
+      const to = now.get(n.id)!;
+      let f = before.get(n.id);
+      if (!f) {
+        // new: start from where its parent was, so it grows out of that block
+        const p = parentOf.get(n.id);
+        const pf = p ? before.get(p) ?? from.get(p) : undefined;
+        f = pf ? { x: pf.x + 8, y: pf.y + 8, w: Math.min(to.w, pf.w - 16), h: Math.min(to.h, pf.h - 16) } : to;
+      }
+      from.set(n.id, f);
+    }
+    const D = 460;
+    const t0 = performance.now();
+    let raf = 0;
+    tweening.current = true;
+    const step = (t: number) => {
+      const k = Math.min(1, (t - t0) / D);
+      const e = k < 0.5 ? 4 * k * k * k : 1 - Math.pow(-2 * k + 2, 3) / 2;
+      const cur = new Map<string, Box>();
+      for (const n of base.nodes) {
+        const a = from.get(n.id)!, b = now.get(n.id)!;
+        cur.set(n.id, { x: a.x + (b.x - a.x) * e, y: a.y + (b.y - a.y) * e, w: a.w + (b.w - a.w) * e, h: a.h + (b.h - a.h) * e });
+      }
+      const nodes = base.nodes.map((n) => {
+        const c = cur.get(n.id)!;
+        const p = n.parentId ? cur.get(n.parentId) : undefined;
+        return { ...n, position: { x: c.x - (p?.x ?? 0), y: c.y - (p?.y ?? 0) }, style: { ...n.style, width: c.w, height: c.h } };
+      });
+      if (k < 1) {
+        setShown({ ...base, nodes, edges: [] });
+        raf = requestAnimationFrame(step);
+      } else {
+        tweening.current = false;
+        setShown(base);
+        setLinesIn(true);
+        window.setTimeout(() => setLinesIn(false), 600);
+      }
+    };
+    raf = requestAnimationFrame(step);
+    return () => { cancelAnimationFrame(raf); tweening.current = false; };
+  }, [base]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // ------------------------------------------------------------- focus on demand
   // At rest: only summed frame-to-frame lines. Pointing at a card swaps in that
   // card's own connections and fades the cards it has nothing to do with.
   const focusId = hovered ?? selected;
-  const { nodes, edges } = useMemo(() => {
+  const { nodes: rawNodes, edges } = useMemo(() => {
+    const base = shown;
     if (mode !== "level" || !view || !focusId) return base;
     const rep = view.cards.has(focusId) || view.groups.some((g) => g.id === focusId) || focusId.startsWith("out:")
       ? focusId : view.repOf(focusId);
@@ -277,23 +366,23 @@ function Inner({ graph, onBack, onRemap }: { graph: GraphData; onBack: () => voi
     const isFrame = view.groups.some((g) => g.id === rep);
     const lit = new Set<string>([rep]);
     let extra: RFEdge[] = [];
-    let shown = base.edges;
+    let litEdges = base.edges;
     if (!base.dense) {
       // every card line is already on screen: light the ones that touch the focus
       const members = new Set<string>([rep, ...(isFrame ? view.groups.find((g) => g.id === rep)!.cards : [])]);
       const touches = (e: RFEdge) => members.has(e.source) || members.has(e.target);
-      shown = base.edges.map((e) => (touches(e)
-        ? { ...e, className: `${e.className} hot`, zIndex: 10, label: (e.data?.verb as string) ?? e.label }
-        : { ...e, className: `${e.className} faded`, zIndex: 2 }));
+      litEdges = base.edges.map((e) => (touches(e)
+        ? { ...e, className: `${e.className} hot`, label: (e.data?.verb as string) ?? e.label }
+        : { ...e, className: `${e.className} faded` }));
       for (const e of base.edges) if (touches(e)) { lit.add(e.source); lit.add(e.target); }
     } else if (isFrame || rep.startsWith("out:")) {
-      shown = base.edges.map((e) => (e.source === rep || e.target === rep ? { ...e, className: `${e.className} hot` } : { ...e, className: `${e.className} faded` }));
+      litEdges = base.edges.map((e) => (e.source === rep || e.target === rep ? { ...e, className: `${e.className} hot` } : { ...e, className: `${e.className} faded` }));
       for (const e of base.edges) if (e.source === rep || e.target === rep) { lit.add(e.source); lit.add(e.target); }
     } else {
       const mine = base.cardLinks.filter((l) => l.source === rep || l.target === rep);
       for (const l of mine) { lit.add(l.source); lit.add(l.target); }
-      extra = mine.map((l) => ({ ...summedEdge(l, "card", base.routes?.get(l.id)), className: `${summedEdge(l, "card").className} hot`, zIndex: 10, label: plainLabel(l) }));
-      shown = base.edges.map((e) => ({ ...e, className: `${e.className} faded` }));
+      extra = mine.map((l) => ({ ...summedEdge(l, "card", base.routes?.get(l.id)), className: `${summedEdge(l, "card").className} hot`, label: plainLabel(l) }));
+      litEdges = base.edges.map((e) => ({ ...e, className: `${e.className} faded` }));
     }
     const g = view.cards.get(rep)?.group;
     if (g) lit.add(g);
@@ -303,23 +392,44 @@ function Inner({ graph, onBack, onRemap }: { graph: GraphData; onBack: () => voi
         const on = lit.has(n.id) || (n.type === "frame" && litGroups.has(n.id));
         return { ...n, className: n.id === rep ? "focus" : on ? "lit" : "faded" };
       }),
-      edges: [...shown, ...extra],
+      edges: [...litEdges, ...extra],
     };
-  }, [base, focusId, mode, view]);
+  }, [shown, focusId, mode, view]);
+  // Fixed sizes: React Flow then never hides a node to re-measure it, which
+  // made cards flicker when they were rebuilt during hover and animations.
+  const nodes = useMemo(() => rawNodes.map((n) => {
+    const st = n.style as { width?: number; height?: number } | undefined;
+    const m = leaving && (n.id === leaving || n.parentId === leaving) ? { className: `${n.className ?? ""} target` } : {};
+    return st?.width != null && st?.height != null ? { ...n, ...m, width: st.width, height: st.height } : { ...n, ...m };
+  }), [rawNodes, leaving]);
 
   // ------------------------------------------------------------- fitting the view
   useEffect(() => {
     fitPending.current = true;
   }, [crumbs, level, expanded, openMode]);
   useEffect(() => {
-    if (!fitPending.current || base.nodes.length === 0) return;
+    if (!fitPending.current || shown.nodes.length === 0 || tweening.current) return;
     // only clear the flag once the fit has run, so a quick second update can't swallow it
     const t = setTimeout(() => {
       fitPending.current = false;
-      rf.fitView({ padding: 0.1, duration: 300, maxZoom: 1.15 });
-    }, 80);
+      const how = enter.current;
+      enter.current = null;
+      const el = canvasRef.current;
+      if (!how || reduced || !el) {
+        rf.fitView({ padding: 0.1, duration: reduced ? 0 : 420, maxZoom: 1.15 });
+        return;
+      }
+      // start a little zoomed out (going in) or in (coming out), then settle
+      rf.fitView({ padding: 0.1, duration: 0, maxZoom: 1.15 });
+      const vp = rf.getViewport();
+      const s = how === "in" ? 0.72 : 1.35;
+      const cx = el.clientWidth / 2, cy = el.clientHeight / 2;
+      rf.setViewport({ x: cx - (cx - vp.x) * s, y: cy - (cy - vp.y) * s, zoom: vp.zoom * s });
+      requestAnimationFrame(() => rf.fitView({ padding: 0.1, duration: 520, maxZoom: 1.15 }));
+    }, 40);
     return () => clearTimeout(t);
-  }, [base, rf]);
+  }, [shown, rf, reduced]);
+
 
   // ------------------------------------------------------------- search
   const results = useMemo(() => search(ix, query, filters), [ix, query, filters]);
@@ -347,14 +457,14 @@ function Inner({ graph, onBack, onRemap }: { graph: GraphData; onBack: () => voi
   const selectedBlock = selected ? ix.blocks.get(selected) ?? null : null;
   const selectedInside = !selectedBlock && insideData ? insideData.blocks.find((b) => b.id === selected) ?? null : null;
   const stats = graph.stats;
-  const shown = view ? view.cards.size : 0;
+  const onScreen = view ? view.cards.size : 0;
 
   return (
     <Actions.Provider value={actions}>
       <div className="app">
         <header className="topbar">
           <button className="ghost-btn" onClick={onBack} title="All projects">◂ Projects</button>
-          <div className="brand">Araknid <span>2.0</span></div>
+          <div className="brand"><BrandMark />Araknid <span>2.0</span></div>
           <div className="seg" role="group" aria-label="How blocks open">
             <button className={openMode === "one" ? "active" : ""} onClick={() => setOpenMode("one")}
               title="See what's in the current block. Open one block at a time to look inside it.">One block</button>
@@ -372,7 +482,7 @@ function Inner({ graph, onBack, onRemap }: { graph: GraphData; onBack: () => voi
                   className={`lvl ${currentLevel === l.n ? "active" : ""} ${inside ? "inside" : ""}`}
                   disabled={disabled}
                   title={inside ? "Inside levels open one block at a time: double-click a function" : `Level ${l.n}: ${l.name}`}
-                  onClick={() => { setLevel(l.n); setShowAll({}); }}
+                  onClick={() => { tweenNext.current = true; setLevel(l.n); setShowAll({}); }}
                 >
                   <b>{l.n}</b> {l.name}
                 </button>
@@ -401,14 +511,17 @@ function Inner({ graph, onBack, onRemap }: { graph: GraphData; onBack: () => voi
               {i > 0 && <span className="sep">›</span>}
               <button
                 className={i === crumbs.length - 1 ? "current" : ""}
-                onClick={() => { setCrumbs(crumbs.slice(0, i + 1)); setShowAll({}); setExpanded(null); setSelected(null); setHovered(null); }}
+                onClick={() => {
+                  if (i === crumbs.length - 1) return;
+                  backOut(() => { setCrumbs(crumbs.slice(0, i + 1)); setShowAll({}); setExpanded(null); setSelected(null); setHovered(null); });
+                }}
               >
                 {crumbTitle(c, i)}
               </button>
             </span>
           ))}
           <span className="stats">
-            {mode === "level" ? `${shown} blocks on screen · ` : ""}
+            {mode === "level" ? `${onScreen} blocks on screen · ` : ""}
             {String(stats.files ?? "?")} files · {Number(stats.lines ?? 0).toLocaleString()} lines
             {busy && " · loading…"}
           </span>
@@ -436,7 +549,7 @@ function Inner({ graph, onBack, onRemap }: { graph: GraphData; onBack: () => voi
               trace to follow it. Point at a card to see its links, and double-click to go inside.
             </p>
           </aside>
-          <div className={`canvas ${focusId ? "has-focus" : ""}`}>
+          <div ref={canvasRef} className={`canvas ${focusId ? "has-focus" : ""} ${leaving === false ? "" : leaving ? "zooming" : "leaving"} ${linesIn ? "lines-in" : ""}`}>
             <ReactFlow
               nodes={nodes}
               edges={edges}
@@ -450,6 +563,7 @@ function Inner({ graph, onBack, onRemap }: { graph: GraphData; onBack: () => voi
               nodesConnectable={false}
               proOptions={{ hideAttribution: true }}
             >
+              <Background variant={BackgroundVariant.Dots} gap={22} size={1.3} color="var(--dots)" />
               <Controls showInteractive={false} />
             </ReactFlow>
             {!busy && nodes.length === 0 && (
@@ -486,6 +600,22 @@ function plainLabel(l: Link): string {
 
 const DENSE_LINKS = 160; // [Guess] above this many lines, a level shows summed frame lines at rest
 
+/** Absolute boxes for nodes (React Flow keeps child positions relative to the parent). */
+function absBoxes(nodes: RFNode[]): Map<string, Box> {
+  const out = new Map<string, Box>();
+  for (const n of nodes) {
+    const p = n.parentId ? out.get(n.parentId) : undefined;
+    const st = n.style as { width?: number; height?: number } | undefined;
+    out.set(n.id, { x: n.position.x + (p?.x ?? 0), y: n.position.y + (p?.y ?? 0), w: st?.width ?? 0, h: st?.height ?? 0 });
+  }
+  return out;
+}
+
+/** A short delay per node so a new view builds up instead of popping in at once. */
+function stagger(i: number): Record<string, string> {
+  return { "--d": `${Math.min(i * 12, 300)}ms` };
+}
+
 function summedEdge(l: Link, scope: "group" | "card", points?: Point[]): RFEdge {
   const kind = mainKind(l);
   const width = Math.min(1 + Math.log2(l.count + 1) * (scope === "group" ? 0.9 : 0.5), scope === "group" ? 5 : 3);
@@ -505,6 +635,18 @@ function summedEdge(l: Link, scope: "group" | "card", points?: Point[]): RFEdge 
     data: { kinds: l.kinds, points, verb: plainLabel(l) },
     ...(points ? { type: "routed", zIndex: 2 } : {}),
   };
+}
+
+export function BrandMark() {
+  return (
+    <svg className="brand-mark" viewBox="0 0 24 24" aria-hidden>
+      <circle cx="12" cy="12" r="2.6" fill="currentColor" />
+      <g stroke="currentColor" strokeWidth="1.4" fill="none" strokeLinecap="round">
+        <path d="M12 3v6M12 15v6M3 12h6M15 12h6M5.6 5.6l4.3 4.3M14.1 14.1l4.3 4.3M18.4 5.6l-4.3 4.3M9.9 14.1l-4.3 4.3" />
+        <path d="M7.5 9.2a5 5 0 0 1 9 0M16.5 14.8a5 5 0 0 1-9 0" opacity=".55" />
+      </g>
+    </svg>
+  );
 }
 
 function Check({ id, label, v, on, color }: { id: string; label: string; v: boolean; on: (v: boolean) => void; color?: string }) {

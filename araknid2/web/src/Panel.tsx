@@ -55,7 +55,7 @@ export function Panel(props: {
   const inc = ix.inc.get(b.id) ?? [];
 
   return (
-    <aside className="panel">
+    <aside className="panel" key={b.id}>
       <div className="panel-head">
         <div>
           <div className="panel-title">{humanTitle(b)}</div>
