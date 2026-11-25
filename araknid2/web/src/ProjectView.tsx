@@ -5,9 +5,9 @@ import {
 } from "@xyflow/react";
 import ELK from "elkjs/lib/elk.bundled.js";
 import { api } from "./api";
-import { layoutLevel, layoutTrace, type Box } from "./canvasLayout";
+import { layoutLevel, layoutTrace, type Box, type Point } from "./canvasLayout";
 import { buildLevelView, buildTrace, type Link } from "./levelview";
-import { Actions, nodeTypes, type CanvasActions } from "./nodes";
+import { Actions, edgeTypes, nodeTypes, type CanvasActions } from "./nodes";
 import { Panel } from "./Panel";
 import type { Block, EdgeKind, GraphData, InsideBlock, InsideResult } from "./types";
 import { defaultFilters, displayTitle, Index, search, type Filters } from "./view";
@@ -58,7 +58,7 @@ function Inner({ graph, onBack, onRemap }: { graph: GraphData; onBack: () => voi
   const [selected, setSelected] = useState<string | null>(null);
   const [hovered, setHovered] = useState<string | null>(null);
   const [query, setQuery] = useState("");
-  const [base, setBase] = useState<{ nodes: RFNode[]; edges: RFEdge[]; cardLinks: Link[] }>({ nodes: [], edges: [], cardLinks: [] });
+  const [base, setBase] = useState<{ nodes: RFNode[]; edges: RFEdge[]; cardLinks: Link[]; routes?: Map<string, Point[]>; dense?: boolean }>({ nodes: [], edges: [], cardLinks: [] });
   const [busy, setBusy] = useState(false);
   const [insideData, setInsideData] = useState<InsideResult | null>(null);
   const codeCache = useRef(new Map<string, string>());
@@ -126,7 +126,7 @@ function Inner({ graph, onBack, onRemap }: { graph: GraphData; onBack: () => voi
     if (!view) return;
     let live = true;
     setBusy(true);
-    layoutLevel(view).then((boxes) => {
+    layoutLevel(view).then(({ boxes, routes }) => {
       if (!live) return;
       const nodes: RFNode[] = [];
       const put = (id: string, type: string, box: Box, data: Record<string, unknown>, z = 1) =>
@@ -153,8 +153,14 @@ function Inner({ graph, onBack, onRemap }: { graph: GraphData; onBack: () => voi
         const b = boxes.get(s.id);
         if (b) put(s.id, "stub", b, { stub: s }, 1);
       }
-      const edges: RFEdge[] = view.groupLinks.filter((l) => boxes.has(l.source) && boxes.has(l.target)).map((l) => summedEdge(l, "group"));
-      setBase({ nodes, edges, cardLinks: view.cardLinks });
+      // Every card-to-card line is drawn at rest along its routed path. Only a
+      // very busy level falls back to one summed line per pair of frames.
+      const routed = view.cardLinks.filter((l) => routes.has(l.id));
+      const dense = routed.length > DENSE_LINKS;
+      const edges: RFEdge[] = dense
+        ? view.groupLinks.filter((l) => boxes.has(l.source) && boxes.has(l.target)).map((l) => summedEdge(l, "group"))
+        : routed.map((l) => summedEdge(l, "card", routes.get(l.id)));
+      setBase({ nodes, edges, cardLinks: view.cardLinks, routes, dense });
       setBusy(false);
     });
     return () => { live = false; };
@@ -250,28 +256,34 @@ function Inner({ graph, onBack, onRemap }: { graph: GraphData; onBack: () => voi
     const rep = view.cards.has(focusId) || view.groups.some((g) => g.id === focusId) || focusId.startsWith("out:")
       ? focusId : view.repOf(focusId);
     if (!rep || rep === "__root__") return base;
-    const isGroup = view.groups.some((g) => g.id === rep) || rep.startsWith("out:");
+    const isFrame = view.groups.some((g) => g.id === rep);
     const lit = new Set<string>([rep]);
     let extra: RFEdge[] = [];
-    let groupEdges = base.edges;
-    if (isGroup) {
-      groupEdges = base.edges.map((e) => (e.source === rep || e.target === rep ? { ...e, className: `${e.className} hot` } : { ...e, className: `${e.className} faded` }));
+    let shown = base.edges;
+    if (!base.dense) {
+      // every card line is already on screen: light the ones that touch the focus
+      const members = new Set<string>([rep, ...(isFrame ? view.groups.find((g) => g.id === rep)!.cards : [])]);
+      const touches = (e: RFEdge) => members.has(e.source) || members.has(e.target);
+      shown = base.edges.map((e) => ({ ...e, className: `${e.className} ${touches(e) ? "hot" : "faded"}`, zIndex: touches(e) ? 10 : 2 }));
+      for (const e of base.edges) if (touches(e)) { lit.add(e.source); lit.add(e.target); }
+    } else if (isFrame || rep.startsWith("out:")) {
+      shown = base.edges.map((e) => (e.source === rep || e.target === rep ? { ...e, className: `${e.className} hot` } : { ...e, className: `${e.className} faded` }));
       for (const e of base.edges) if (e.source === rep || e.target === rep) { lit.add(e.source); lit.add(e.target); }
     } else {
       const mine = base.cardLinks.filter((l) => l.source === rep || l.target === rep);
       for (const l of mine) { lit.add(l.source); lit.add(l.target); }
-      extra = mine.map((l) => ({ ...summedEdge(l, "card"), zIndex: 10 }));
-      groupEdges = base.edges.map((e) => ({ ...e, className: `${e.className} faded` }));
-      const g = view.cards.get(rep)?.group;
-      if (g) lit.add(g);
+      extra = mine.map((l) => ({ ...summedEdge(l, "card", base.routes?.get(l.id)), className: `${summedEdge(l, "card").className} hot`, zIndex: 10 }));
+      shown = base.edges.map((e) => ({ ...e, className: `${e.className} faded` }));
     }
+    const g = view.cards.get(rep)?.group;
+    if (g) lit.add(g);
     const litGroups = new Set([...lit].map((id) => view.cards.get(id)?.group).filter(Boolean) as string[]);
     return {
       nodes: base.nodes.map((n) => {
         const on = lit.has(n.id) || (n.type === "frame" && litGroups.has(n.id));
         return { ...n, className: n.id === rep ? "focus" : on ? "lit" : "faded" };
       }),
-      edges: [...groupEdges, ...extra],
+      edges: [...shown, ...extra],
     };
   }, [base, focusId, mode, view]);
 
@@ -387,8 +399,8 @@ function Inner({ graph, onBack, onRemap }: { graph: GraphData; onBack: () => voi
             <Check id="f-maybe" label="Maybe links (guessed by name)" v={filters.maybe} on={(v) => setFilters({ ...filters, maybe: v })} />
             <h4>How to read it</h4>
             <p className="hint">
-              You see one block at a time. Lines between boxes are totals: the number says how many connections run
-              that way.
+              You see one block at a time. Code that uses something sits to its left, and the number on a line says
+              how many connections run that way.
             </p>
             <p className="hint">
               Click a card to trace it: who uses it on the left, what it uses on the right. Click any card in a
@@ -400,6 +412,7 @@ function Inner({ graph, onBack, onRemap }: { graph: GraphData; onBack: () => voi
               nodes={nodes}
               edges={edges}
               nodeTypes={nodeTypes}
+              edgeTypes={edgeTypes}
               onPaneClick={() => setSelected(null)}
               minZoom={0.1}
               maxZoom={2}
@@ -436,22 +449,26 @@ function Inner({ graph, onBack, onRemap }: { graph: GraphData; onBack: () => voi
   );
 }
 
-function summedEdge(l: Link, scope: "group" | "card"): RFEdge {
+const DENSE_LINKS = 160; // [Guess] above this many lines, a level shows summed frame lines at rest
+
+function summedEdge(l: Link, scope: "group" | "card", points?: Point[]): RFEdge {
   const kind = mainKind(l);
-  const width = Math.min(1 + Math.log2(l.count + 1) * (scope === "group" ? 0.9 : 0.6), 5);
+  const width = Math.min(1 + Math.log2(l.count + 1) * (scope === "group" ? 0.9 : 0.5), scope === "group" ? 5 : 3);
+  const head = Math.max(6, 14 / width); // markers scale with the line, keep the arrow the same size
   return {
     id: `${scope}:${l.id}`,
     source: l.source,
     target: l.target,
     className: `sum sum-${kind} ${scope} ${l.maybe ? "maybe" : ""}`,
     style: { stroke: EDGE_COLORS[kind], strokeWidth: width },
-    markerEnd: { type: MarkerType.ArrowClosed, color: EDGE_COLORS[kind], width: 12, height: 12 },
+    markerEnd: { type: MarkerType.ArrowClosed, color: EDGE_COLORS[kind], width: head, height: head },
     label: l.count > 1 ? String(l.count) : undefined,
     labelBgPadding: [4, 2],
     labelBgBorderRadius: 8,
     selectable: false,
     focusable: false,
-    data: { kinds: l.kinds },
+    data: { kinds: l.kinds, points },
+    ...(points ? { type: "routed", zIndex: 2 } : {}),
   };
 }
 

@@ -309,6 +309,7 @@ input[type="text"], input:not([type]) {
 .react-flow__edge.sum.maybe path { stroke-dasharray: 3 4; }
 .react-flow__edge.sum-imports path { stroke-dasharray: 6 4; }
 .react-flow__edge.sum.group path { opacity: .55; }
+.react-flow__edge.sum.card path { opacity: .6; }
 .react-flow__edge.sum.hot path { opacity: 1; }
 .react-flow__edge.sum.faded path { opacity: .08; }
 .react-flow__edge.sum.faded .react-flow__edge-textwrapper, .react-flow__edge.sum.faded text, .react-flow__edge.sum.faded rect { opacity: .1; }

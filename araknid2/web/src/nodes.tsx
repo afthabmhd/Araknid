@@ -1,5 +1,5 @@
 import { createContext, memo, useContext, useRef } from "react";
-import { Handle, Position, type NodeProps } from "@xyflow/react";
+import { BaseEdge, Handle, Position, type EdgeProps, type NodeProps } from "@xyflow/react";
 import type { Block, InsideBlock } from "./types";
 import { displayTitle, humanTitle } from "./view";
 import type { Card, Group, Stub } from "./levelview";
@@ -212,3 +212,43 @@ export const nodeTypes = {
   card: CardNode, more: MoreNode, frame: FrameNode, stub: StubNode,
   traceCentre: TraceCentreNode, traceGroup: TraceGroupNode, inside: InsideNode,
 };
+
+// ------------------------------------------------------------------ edges
+
+type Pt = { x: number; y: number };
+
+/** A line drawn along the route ELK picked, with rounded corners. */
+export function RoutedEdge(p: EdgeProps) {
+  const pts = (p.data?.points as Pt[] | undefined) ?? [{ x: p.sourceX, y: p.sourceY }, { x: p.targetX, y: p.targetY }];
+  const r = 6;
+  let d = `M ${pts[0].x} ${pts[0].y}`;
+  for (let i = 1; i < pts.length; i++) {
+    const cur = pts[i];
+    const next = pts[i + 1];
+    if (!next) { d += ` L ${cur.x} ${cur.y}`; break; }
+    const prev = pts[i - 1];
+    const inLen = Math.hypot(cur.x - prev.x, cur.y - prev.y);
+    const outLen = Math.hypot(next.x - cur.x, next.y - cur.y);
+    const k = Math.min(r, inLen / 2, outLen / 2);
+    const ax = cur.x - ((cur.x - prev.x) / (inLen || 1)) * k;
+    const ay = cur.y - ((cur.y - prev.y) / (inLen || 1)) * k;
+    const bx = cur.x + ((next.x - cur.x) / (outLen || 1)) * k;
+    const by = cur.y + ((next.y - cur.y) / (outLen || 1)) * k;
+    d += ` L ${ax} ${ay} Q ${cur.x} ${cur.y} ${bx} ${by}`;
+  }
+  // label on the longest straight piece
+  let best = 0, lx = pts[0].x, ly = pts[0].y;
+  for (let i = 1; i < pts.length; i++) {
+    const len = Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+    if (len > best) { best = len; lx = (pts[i].x + pts[i - 1].x) / 2; ly = (pts[i].y + pts[i - 1].y) / 2; }
+  }
+  return (
+    <BaseEdge
+      id={p.id} path={d} markerEnd={p.markerEnd} style={p.style} interactionWidth={0}
+      label={p.label} labelX={lx} labelY={ly} labelStyle={p.labelStyle}
+      labelShowBg={p.labelShowBg} labelBgStyle={p.labelBgStyle} labelBgPadding={p.labelBgPadding} labelBgBorderRadius={p.labelBgBorderRadius}
+    />
+  );
+}
+
+export const edgeTypes = { routed: RoutedEdge };

@@ -15,10 +15,13 @@ This first slice is the **code web**: it covers the Phase 0 graph engine spike a
      Double-click a card to go inside, and use the breadcrumb to come back out.
   2. **At most one layer of frames.** Cards are grouped by the child of the current block they live in. Frames
      never nest.
-  3. **Connections are summed.** At rest you only see one line per pair of frames, with a count. A card's own
-     connections appear when you point at it or select it, and everything unrelated fades.
+  3. **Lines go around cards, never across them.** ELK lays each frame out by flow (users on the left, what they use
+     on the right) and routes every line with right-angle bends; one line per pair of cards, with a count. Pointing at
+     a card or frame lights its lines and fades the rest. Only a very busy level (over 160 lines) falls back to one
+     summed line per pair of frames. Cards with no lines are packed in a small grid, and unrelated frames sit side by
+     side.
   4. **Nothing is cut off.** A connection to code outside the current block is counted on an "outside" stub.
-  **Trace** (side panel) shows one block in the middle, what uses it on the left and what it uses on the right,
+  **Trace** is the main way to explore: click any card to see it in the middle, what uses it on the left and what it uses on the right,
   grouped by file. Functions open into the inside levels 5 to 7 (sections, statements, expressions).
 
 ## Run it
@@ -72,7 +75,7 @@ araknid2/
   web/src/
     view.ts      display tree: slider, pass-through collapse, "+ N more", edge roll-up, ghost stubs
     levelview.ts what is on screen: cards, frames, summed links, outside stubs, trace
-    canvasLayout.ts  grid inside frames, ELK left-to-right between frames, trace columns
+    canvasLayout.ts  ELK layered layout with routed lines, row packing of unrelated frames, trace columns
     ProjectView.tsx, nodes.tsx, Panel.tsx, ImportScreen.tsx
 ```
 
@@ -93,7 +96,7 @@ araknid2/
 
 ## Guesses and gaps (to confirm)
 
-- **[Guess]** At most 24 cards per frame and 16 frames before "+ N more".
+- **[Guess]** At most 24 cards per frame and 16 frames before "+ N more". Over 160 lines on a level, lines are summed per frame.
 - **[Guess]** "+ N more" folds after 30 children, sections start at 40 lines or more than 3 control structures, and a
   file counts as `few_blocks` when it has over 300 lines and no definitions.
 - **[Guess]** Level 0 "project" is an extra root above the System blocks, so the tree has a single root.
