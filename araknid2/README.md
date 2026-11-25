@@ -9,11 +9,17 @@ This first slice is the **code web**: it covers the Phase 0 graph engine spike a
   the machine running the server.
 - Araknid's own graph engine maps it with tree-sitter into the unified block model: one record type with a parent,
   a level, hashes and line ranges, plus edges (imports, calls, instantiates, inherits, renders).
-- The web client draws it as a **spiderweb** (React Flow). The block you're in sits at the centre, each level is a
-  ring, and every block hangs on a thread from its parent. Connections are bundled towards their shared parent and
-  rest as faint silk until you hover or select a block, which lights its connections and fades the rest. It also has
-  a detail slider (levels 1 to 4), opening a block onto the next ring, drilling in with a breadcrumb, search,
-  filters, and the inside levels 5 to 7 (sections, statements, expressions), built on demand for a function.
+- The web client (React Flow + ELK) keeps the map simple with four rules, taken from Sourcetrail, CodeSee and
+  research on compound graphs and edge compression:
+  1. **One block at a time.** The canvas shows what is inside the block you're in, at the level the slider picks.
+     Double-click a card to go inside, and use the breadcrumb to come back out.
+  2. **At most one layer of frames.** Cards are grouped by the child of the current block they live in. Frames
+     never nest.
+  3. **Connections are summed.** At rest you only see one line per pair of frames, with a count. A card's own
+     connections appear when you point at it or select it, and everything unrelated fades.
+  4. **Nothing is cut off.** A connection to code outside the current block is counted on an "outside" stub.
+  **Trace** (side panel) shows one block in the middle, what uses it on the left and what it uses on the right,
+  grouped by file. Functions open into the inside levels 5 to 7 (sections, statements, expressions).
 
 ## Run it
 
@@ -65,7 +71,8 @@ araknid2/
     api.py       FastAPI endpoints
   web/src/
     view.ts      display tree: slider, pass-through collapse, "+ N more", edge roll-up, ghost stubs
-    radial.ts    the spiderweb layout: rings, wedges by size, edge bundling
+    levelview.ts what is on screen: cards, frames, summed links, outside stubs, trace
+    canvasLayout.ts  grid inside frames, ELK left-to-right between frames, trace columns
     ProjectView.tsx, nodes.tsx, Panel.tsx, ImportScreen.tsx
 ```
 
@@ -76,9 +83,9 @@ araknid2/
 | Level 1 systems come from manifests (`package.json`, `pyproject.toml`, Dockerfile, ...); files outside every unit go to a root unit | `engine._detect_systems` |
 | One parent per block; ids are stable because they're derived from the path | `model.block_id` |
 | Pass-through collapse (`src/` wrappers, a file holding one class) and skipping empty levels | `view.collapseChain` |
-| Classes are frames holding their methods at level 4 | `view.defaultOpen` |
-| Importance = in-degree + entry points/routes + exported, with super-hubs left out of the ranking; the rest folds into "+ N more" | `engine.build_graph`, `view.buildDisplay` |
-| Edges roll up to whatever is visible, with counts; edges leaving a drilled-in block show as stubs | `view.buildDisplay` |
+| A class is one card at level 4; open it to see its methods | `levelview.buildLevelView` |
+| Importance = in-degree + entry points/routes + exported, with super-hubs left out of the ranking; the rest folds into "+ N more" | `engine.build_graph`, `levelview.buildLevelView` |
+| Edges roll up to whatever is visible, with counts; edges leaving the current block show as outside stubs | `levelview.buildLevelView` |
 | Tests stay beside the code and are hidden by default | `walker.is_test_path`, filters |
 | Stub detection ("partially built") | `parsers._py_is_stub`, `_js_is_stub` |
 | Parse-health check | `engine.build_graph` (`parse_errors`, `few_blocks`) |
@@ -86,8 +93,7 @@ araknid2/
 
 ## Guesses and gaps (to confirm)
 
-- **[Guess]** Web layout constants: 30 px between dots on a ring, 170 px between rings, 36 outer labels kept when
-  zoomed out, labels hide below 85% zoom.
+- **[Guess]** At most 24 cards per frame and 16 frames before "+ N more".
 - **[Guess]** "+ N more" folds after 30 children, sections start at 40 lines or more than 3 control structures, and a
   file counts as `few_blocks` when it has over 300 lines and no definitions.
 - **[Guess]** Level 0 "project" is an extra root above the System blocks, so the tree has a single root.

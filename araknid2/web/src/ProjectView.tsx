@@ -1,15 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  Controls, MarkerType, MiniMap, ReactFlow, ReactFlowProvider, useReactFlow,
+  Controls, MarkerType, ReactFlow, ReactFlowProvider, useReactFlow,
   type Edge as RFEdge, type Node as RFNode,
 } from "@xyflow/react";
 import ELK from "elkjs/lib/elk.bundled.js";
 import { api } from "./api";
-import { Actions, edgeTypes, nodeTypes, type CanvasActions } from "./nodes";
+import { layoutLevel, layoutTrace, type Box } from "./canvasLayout";
+import { buildLevelView, buildTrace, type Link } from "./levelview";
+import { Actions, nodeTypes, type CanvasActions } from "./nodes";
 import { Panel } from "./Panel";
-import { bundlePoint, webLayout } from "./radial";
 import type { Block, EdgeKind, GraphData, InsideBlock, InsideResult } from "./types";
-import { buildDisplay, defaultFilters, displayTitle, Index, search, type Filters } from "./view";
+import { defaultFilters, displayTitle, Index, search, type Filters } from "./view";
 
 const LEVELS = [
   { n: 1, name: "System" },
@@ -30,10 +31,15 @@ export const EDGE_COLORS: Record<EdgeKind, string> = {
   next: "var(--e-imports)",
 };
 
-const MAJOR_LABELS = 36; // [Guess] how many outer labels stay visible when zoomed out
-const ZOOM_LABELS = 0.85; // below this zoom, minor labels hide
+type Crumb =
+  | { kind: "block"; id: string }
+  | { kind: "inside"; item: InsideBlock; title: string }
+  | { kind: "trace"; id: string };
 
-type Crumb = { kind: "block"; id: string } | { kind: "inside"; item: InsideBlock; title: string };
+const mainKind = (l: Link): EdgeKind =>
+  (Object.entries(l.kinds).sort((a, b) => (b[1] ?? 0) - (a[1] ?? 0))[0]?.[0] as EdgeKind) ?? "calls";
+
+const pe = { pointerEvents: "all" as const }; // React Flow turns pointer events off on nodes it can't drag or select
 
 export function ProjectView({ graph, onBack, onRemap }: { graph: GraphData; onBack: () => void; onRemap: () => void }) {
   return (
@@ -46,53 +52,54 @@ export function ProjectView({ graph, onBack, onRemap }: { graph: GraphData; onBa
 function Inner({ graph, onBack, onRemap }: { graph: GraphData; onBack: () => void; onRemap: () => void }) {
   const ix = useMemo(() => new Index(graph), [graph]);
   const [level, setLevel] = useState(2);
-  const [open, setOpen] = useState<Record<string, boolean>>({});
   const [showAll, setShowAll] = useState<Record<string, boolean>>({});
   const [filters, setFilters] = useState<Filters>(defaultFilters);
   const [crumbs, setCrumbs] = useState<Crumb[]>([{ kind: "block", id: graph.root_id }]);
   const [selected, setSelected] = useState<string | null>(null);
   const [hovered, setHovered] = useState<string | null>(null);
   const [query, setQuery] = useState("");
-  const [zoomedOut, setZoomedOut] = useState(true);
-  const [insideNodes, setInsideNodes] = useState<RFNode[]>([]);
-  const [insideEdges, setInsideEdges] = useState<RFEdge[]>([]);
+  const [base, setBase] = useState<{ nodes: RFNode[]; edges: RFEdge[]; cardLinks: Link[] }>({ nodes: [], edges: [], cardLinks: [] });
   const [busy, setBusy] = useState(false);
   const [insideData, setInsideData] = useState<InsideResult | null>(null);
   const codeCache = useRef(new Map<string, string>());
   const rf = useReactFlow();
   const fitPending = useRef(true);
 
+  const top = crumbs[crumbs.length - 1];
   const blockCrumbs = crumbs.filter((c): c is Extract<Crumb, { kind: "block" }> => c.kind === "block");
   const rootId = blockCrumbs[blockCrumbs.length - 1].id;
-  const insideTop = crumbs[crumbs.length - 1];
-  const insideMode = insideTop.kind === "inside";
+  const mode: "level" | "inside" | "trace" = top.kind === "block" ? "level" : top.kind;
 
-  const display = useMemo(
-    () => buildDisplay(ix, { rootId, level, open, showAll, filters }),
-    [ix, rootId, level, open, showAll, filters],
+  const view = useMemo(
+    () => (mode === "level" ? buildLevelView(ix, rootId, level, filters, showAll) : null),
+    [ix, rootId, level, filters, showAll, mode],
   );
-  const web = useMemo(() => webLayout(display), [display]);
+  const trace = useMemo(() => (top.kind === "trace" ? buildTrace(ix, top.id, filters) : null), [ix, top, filters]);
 
   // ------------------------------------------------------------- actions
   const drill = useCallback((b: Block) => {
-    fitPending.current = true;
     if (["function", "method", "component"].includes(b.kind) && b.start_byte != null && b.file) {
       const item: InsideBlock = {
         id: b.id, level: 4, kind: "definition", node_type: b.kind, label: b.code_name, file: b.file,
         start_byte: b.start_byte, end_byte: b.end_byte!, start_line: b.start_line!, end_line: b.end_line!,
         has_children: true, code: "",
       };
-      setCrumbs((c) => [...c, { kind: "inside", item, title: `${b.code_name}()` }]);
+      setCrumbs((c) => [...c.filter((x) => x.kind !== "trace"), { kind: "inside", item, title: `${b.code_name}()` }]);
     } else {
-      setCrumbs((c) => [...c, { kind: "block", id: b.id }]);
+      setCrumbs((c) => [...c.filter((x) => x.kind !== "trace"), { kind: "block", id: b.id }]);
     }
-    setOpen({});
     setShowAll({});
     setSelected(null);
+    setHovered(null);
+  }, []);
+
+  const traceBlock = useCallback((b: Block) => {
+    setCrumbs((c) => [...c.filter((x) => x.kind !== "trace" && x.kind !== "inside"), { kind: "trace", id: b.id }]);
+    setSelected(b.id);
+    setHovered(null);
   }, []);
 
   const drillInside = useCallback((ib: InsideBlock) => {
-    fitPending.current = true;
     setCrumbs((c) => [...c, { kind: "inside", item: ib, title: ib.kind === "section" ? ib.label : ib.node_type.replace(/_/g, " ") }]);
   }, []);
 
@@ -104,121 +111,98 @@ function Inner({ graph, onBack, onRemap }: { graph: GraphData; onBack: () => voi
     return res.code;
   }, [graph.project_id]);
 
-  const isOpen = useCallback((id: string) => display.nodes.get(id)?.kind === "frame", [display]);
-  const toggleOpen = useCallback((b: Block) => setOpen((o) => ({ ...o, [b.id]: !isOpen(b.id) })), [isOpen]);
-
   const actions: CanvasActions = useMemo(() => ({
     select: (id) => setSelected(id),
     hover: (id) => setHovered(id),
-    toggleOpen,
+    toggleOpen: (b) => drill(b),
     drill,
     showAll: (owner) => setShowAll((s) => ({ ...s, [owner]: true })),
     drillInside,
-  }), [toggleOpen, drill, drillInside]);
+  }), [drill, drillInside]);
 
-  // ------------------------------------------------------------- the web
-  const base = useMemo(() => {
+  // ------------------------------------------------------------- level view
+  useEffect(() => {
+    if (!view) return;
+    let live = true;
+    setBusy(true);
+    layoutLevel(view).then((boxes) => {
+      if (!live) return;
+      const nodes: RFNode[] = [];
+      const put = (id: string, type: string, box: Box, data: Record<string, unknown>, z = 1) =>
+        nodes.push({
+          id, type, data, position: { x: box.x, y: box.y }, parentId: box.parent,
+          style: { width: box.w, height: box.h, ...pe }, draggable: false, selectable: false, zIndex: z,
+        });
+      for (const g of view.groups) {
+        const gb = boxes.get(g.id);
+        if (!gb) continue;
+        put(g.id, "frame", gb, { group: g }, 0);
+        for (const cid of g.cards) {
+          const cb = boxes.get(cid);
+          const card = view.cards.get(cid)!;
+          if (cb) put(cid, card.more ? "more" : "card", cb, { card }, 1);
+        }
+      }
+      for (const id of view.loose) {
+        const b = boxes.get(id);
+        const card = view.cards.get(id)!;
+        if (b) put(id, card.more ? "more" : "card", b, { card }, 1);
+      }
+      for (const s of view.stubs) {
+        const b = boxes.get(s.id);
+        if (b) put(s.id, "stub", b, { stub: s }, 1);
+      }
+      const edges: RFEdge[] = view.groupLinks.filter((l) => boxes.has(l.source) && boxes.has(l.target)).map((l) => summedEdge(l, "group"));
+      setBase({ nodes, edges, cardLinks: view.cardLinks });
+      setBusy(false);
+    });
+    return () => { live = false; };
+  }, [view]);
+
+  // ------------------------------------------------------------- trace view
+  useEffect(() => {
+    if (!trace) return;
+    const boxes = layoutTrace(trace);
     const nodes: RFNode[] = [];
     const edges: RFEdge[] = [];
-    const lastRing = web.rings[web.rings.length - 1] ?? 0;
-    // the silk: spokes at each first-ring block (at least 8) and rings between them
-    const firstRing = [...web.pos.values()].filter((p) => p.depth === 1).map((p) => p.angle);
-    let spokes = [...firstRing].sort((a, b) => a - b);
-    if (spokes.length < 8) spokes = Array.from({ length: 12 }, (_, i) => -Math.PI / 2 + (i / 12) * 2 * Math.PI);
-    if (web.rings.length > 1) {
-      nodes.push({
-        id: "__rings__", type: "rings", position: { x: -(lastRing + 60), y: -(lastRing + 60) },
-        data: { rings: web.rings, spokes }, draggable: false, selectable: false, focusable: false, zIndex: -1,
-        style: { pointerEvents: "none" },
-      });
-    }
-    nodes.push({
-      id: "__hub__", type: "hub", position: { x: -16, y: -16 }, data: { block: display.effectiveRoot },
-      draggable: false, selectable: false, style: { width: 32, height: 32, pointerEvents: "all" },
-    });
-
-    // label budget: inner rings always, outer leaves only the most important
-    const leaves = [...display.nodes.values()].filter((n) => n.kind === "card" && n.block);
-    const major = new Set(
-      [...leaves].sort((a, b) => (b.block!.importance - a.block!.importance) || (b.block!.loc - a.block!.loc))
-        .slice(0, MAJOR_LABELS).map((n) => n.id),
-    );
-
-    for (const [id, p] of web.pos) {
-      const n = display.nodes.get(id)!;
-      const outer = n.kind !== "frame";
-      nodes.push({
-        id, type: "web",
-        position: { x: p.x - p.r, y: p.y - p.r },
-        data: { node: n, pos: p, outer, minor: outer && !major.has(id) && p.depth > 1 },
-        // React Flow turns pointer events off on nodes it can't drag or select
-        style: { width: p.r * 2, height: p.r * 2, pointerEvents: "all" },
-        draggable: false, selectable: false,
-      });
-      edges.push({
-        id: `t:${id}`, source: n.parent ?? "__hub__", target: id, type: "thread",
-        className: "thread", selectable: false, focusable: false,
-      });
-    }
-
-    for (const e of display.edges) {
-      if (!web.pos.has(e.source) || !web.pos.has(e.target)) continue;
-      const c = bundlePoint(display, web, e.source, e.target);
-      edges.push({
-        id: e.id, source: e.source, target: e.target, type: "bundled",
-        data: { cx: c.x, cy: c.y, kind: e.kind },
-        className: `conn conn-${e.kind} ${e.maybe ? "maybe" : ""}`,
-        style: { strokeWidth: Math.min(0.7 + Math.log2(e.count + 1) * 0.5, 3) },
-        selectable: false, focusable: false,
-      });
-    }
-    return { nodes, edges };
-  }, [web, display]);
-
-  // Focus mode: hovering or selecting a block lights it, its connections and
-  // its parents, and fades everything else back into the web.
-  const focusId = hovered ?? selected;
-  const { nodes, edges } = useMemo(() => {
-    if (insideMode) return { nodes: insideNodes, edges: insideEdges };
-    const focus = focusId ? (display.nodes.has(focusId) ? focusId : resolveShown(ix, display, focusId)) : null;
-    if (!focus) return base;
-    const lit = new Set<string>([focus]);
-    let cur = display.nodes.get(focus)?.parent ?? null;
-    while (cur) { lit.add(cur); cur = display.nodes.get(cur)?.parent ?? null; }
-    const hotEdges = new Set<string>();
-    for (const e of display.edges) {
-      if (e.source === focus || e.target === focus) {
-        hotEdges.add(e.id);
-        lit.add(e.source);
-        lit.add(e.target);
+    const cid = `mid:${trace.centre.id}`;
+    const cb = boxes.get(cid)!;
+    nodes.push({ id: cid, type: "traceCentre", data: { block: trace.centre }, position: { x: cb.x, y: cb.y }, style: { width: cb.w, height: cb.h, ...pe }, draggable: false, selectable: false });
+    for (const [side, groups] of [["in", trace.callers], ["out", trace.callees]] as const) {
+      for (const g of groups) {
+        const gid = `${side}:${g.group.id}`;
+        const gb = boxes.get(gid)!;
+        nodes.push({ id: gid, type: "traceGroup", data: { block: g.group }, position: { x: gb.x, y: gb.y }, style: { width: gb.w, height: gb.h }, draggable: false, selectable: false, zIndex: 0 });
+        for (const it of g.items) {
+          const id = `${side}:${it.block.id}`;
+          const b = boxes.get(id)!;
+          nodes.push({
+            id, type: "card", parentId: gid, data: { card: { id: it.block.id, block: it.block, chain: [it.block], group: gid } },
+            position: { x: b.x, y: b.y }, style: { width: b.w, height: b.h, ...pe }, draggable: false, selectable: false, zIndex: 1,
+          });
+          const kind = it.kinds[0];
+          edges.push({
+            id: `te:${id}`, source: side === "in" ? id : cid, target: side === "in" ? cid : id,
+            className: `sum sum-${kind}`,
+            style: { stroke: EDGE_COLORS[kind], strokeWidth: 1.4 },
+            markerEnd: { type: MarkerType.ArrowClosed, color: EDGE_COLORS[kind], width: 12, height: 12 },
+            label: it.count > 1 ? `${it.kinds.join(", ")} ×${it.count}` : it.kinds.join(", "),
+            labelBgPadding: [4, 2], labelBgBorderRadius: 4,
+            selectable: false, focusable: false,
+          });
+        }
       }
     }
-    return {
-      nodes: base.nodes.map((n) => n.type !== "web" ? n : {
-        ...n, className: n.id === focus ? "focus" : lit.has(n.id) ? "lit" : "faded",
-      }),
-      edges: base.edges.map((e) => {
-        if (e.type === "thread") return lit.has(e.target) ? { ...e, className: "thread lit" } : e;
-        if (!hotEdges.has(e.id)) return { ...e, className: `${e.className} faded` };
-        const kind = (e.data as { kind: EdgeKind }).kind;
-        return {
-          ...e,
-          className: `${e.className} hot`,
-          style: { ...e.style, stroke: EDGE_COLORS[kind], strokeWidth: Number(e.style?.strokeWidth ?? 1) + 0.6 },
-          markerEnd: { type: MarkerType.ArrowClosed, color: EDGE_COLORS[kind], width: 12, height: 12 },
-          zIndex: 5,
-        };
-      }),
-    };
-  }, [base, focusId, display, ix, insideMode, insideNodes, insideEdges]);
+    setBase({ nodes, edges, cardLinks: [] });
+  }, [trace]);
 
   // ------------------------------------------------------------- inside levels
   useEffect(() => {
-    if (insideTop.kind !== "inside") {
+    if (top.kind !== "inside") {
       setInsideData(null);
       return;
     }
-    const it = insideTop.item;
+    const it = top.item;
     let live = true;
     setBusy(true);
     api.inside(graph.project_id, it.file, it.start_byte, it.end_byte, it.kind)
@@ -226,20 +210,13 @@ function Inner({ graph, onBack, onRemap }: { graph: GraphData; onBack: () => voi
       .catch(() => live && setInsideData({ blocks: [], edges: [] }))
       .finally(() => live && setBusy(false));
     return () => { live = false; };
-  }, [insideTop, graph.project_id]);
+  }, [top, graph.project_id]);
 
   useEffect(() => {
-    if (!insideMode || !insideData) {
-      setInsideNodes([]);
-      setInsideEdges([]);
-      return;
-    }
+    if (mode !== "inside" || !insideData) return;
     let live = true;
     const elk = new ELK();
-    const sized = insideData.blocks.map((b) => {
-      const lines = Math.min(b.code.split("\n").length, 14);
-      return { id: b.id, width: 520, height: 46 + lines * 16 + 14 };
-    });
+    const sized = insideData.blocks.map((b) => ({ id: b.id, width: 520, height: 46 + Math.min(b.code.split("\n").length, 14) * 16 + 14 }));
     elk.layout({
       id: "root",
       layoutOptions: { "elk.algorithm": "layered", "elk.direction": "DOWN", "elk.spacing.nodeNode": "24", "elk.layered.spacing.nodeNodeBetweenLayers": "30" },
@@ -248,80 +225,93 @@ function Inner({ graph, onBack, onRemap }: { graph: GraphData; onBack: () => voi
     }).then((res) => {
       if (!live) return;
       const byId = new Map(insideData.blocks.map((b) => [b.id, b]));
-      setInsideNodes((res.children ?? []).map((c) => ({
-        id: c.id, type: "inside", position: { x: c.x ?? 0, y: c.y ?? 0 },
-        data: { inside: byId.get(c.id) }, style: { width: c.width, height: c.height, pointerEvents: "all" }, draggable: false,
-      })));
-      setInsideEdges(insideData.edges.map((e, i) => ({
-        id: `ie${i}`, source: e.source, target: e.target, type: "smoothstep",
-        style: { stroke: EDGE_COLORS.next }, markerEnd: { type: MarkerType.ArrowClosed },
-      })));
+      setBase({
+        nodes: (res.children ?? []).map((c) => ({
+          id: c.id, type: "inside", position: { x: c.x ?? 0, y: c.y ?? 0 },
+          data: { inside: byId.get(c.id) }, style: { width: c.width, height: c.height, ...pe }, draggable: false, selectable: false,
+        })),
+        edges: insideData.edges.map((e, i) => ({
+          id: `ie${i}`, source: e.source, target: e.target, type: "smoothstep",
+          style: { stroke: EDGE_COLORS.next }, markerEnd: { type: MarkerType.ArrowClosed },
+        })),
+        cardLinks: [],
+      });
     });
     return () => { live = false; };
-  }, [insideMode, insideData]);
+  }, [mode, insideData]);
+
+  // ------------------------------------------------------------- focus on demand
+  // At rest: only summed frame-to-frame lines. Pointing at a card swaps in that
+  // card's own connections and fades the cards it has nothing to do with.
+  const focusId = hovered ?? selected;
+  const { nodes, edges } = useMemo(() => {
+    if (mode !== "level" || !view || !focusId) return base;
+    const rep = view.cards.has(focusId) || view.groups.some((g) => g.id === focusId) || focusId.startsWith("out:")
+      ? focusId : view.repOf(focusId);
+    if (!rep || rep === "__root__") return base;
+    const isGroup = view.groups.some((g) => g.id === rep) || rep.startsWith("out:");
+    const lit = new Set<string>([rep]);
+    let extra: RFEdge[] = [];
+    let groupEdges = base.edges;
+    if (isGroup) {
+      groupEdges = base.edges.map((e) => (e.source === rep || e.target === rep ? { ...e, className: `${e.className} hot` } : { ...e, className: `${e.className} faded` }));
+      for (const e of base.edges) if (e.source === rep || e.target === rep) { lit.add(e.source); lit.add(e.target); }
+    } else {
+      const mine = base.cardLinks.filter((l) => l.source === rep || l.target === rep);
+      for (const l of mine) { lit.add(l.source); lit.add(l.target); }
+      extra = mine.map((l) => ({ ...summedEdge(l, "card"), zIndex: 10 }));
+      groupEdges = base.edges.map((e) => ({ ...e, className: `${e.className} faded` }));
+      const g = view.cards.get(rep)?.group;
+      if (g) lit.add(g);
+    }
+    const litGroups = new Set([...lit].map((id) => view.cards.get(id)?.group).filter(Boolean) as string[]);
+    return {
+      nodes: base.nodes.map((n) => {
+        const on = lit.has(n.id) || (n.type === "frame" && litGroups.has(n.id));
+        return { ...n, className: n.id === rep ? "focus" : on ? "lit" : "faded" };
+      }),
+      edges: [...groupEdges, ...extra],
+    };
+  }, [base, focusId, mode, view]);
 
   // ------------------------------------------------------------- fitting the view
   useEffect(() => {
     fitPending.current = true;
   }, [crumbs, level]);
   useEffect(() => {
-    if (!fitPending.current || nodes.length === 0) return;
-    if (insideMode && !insideNodes.length) return;
+    if (!fitPending.current || base.nodes.length === 0) return;
     fitPending.current = false;
-    const t = setTimeout(() => rf.fitView({ padding: 0.08, duration: 350, maxZoom: 1.2 }), 150);
+    const t = setTimeout(() => rf.fitView({ padding: 0.1, duration: 300, maxZoom: 1.15 }), 80);
     return () => clearTimeout(t);
-  }, [nodes, rf, insideMode, insideNodes.length]);
+  }, [base, rf]);
 
   // ------------------------------------------------------------- search
   const results = useMemo(() => search(ix, query, filters), [ix, query, filters]);
-  const pendingCentre = useRef<string | null>(null);
   const reveal = (b: Block) => {
-    const anc = ix.ancestors(b.id).slice(0, -1);
-    const root = ix.ancestors(rootId);
-    const inRoot = root.every((r, i) => anc[i]?.id === r.id) || b.id === rootId;
-    if (!inRoot || insideMode) setCrumbs([{ kind: "block", id: graph.root_id }]);
-    setOpen((o) => {
-      const n = { ...o };
-      for (const a of anc) n[a.id] = true;
-      return n;
-    });
-    setShowAll((s) => {
-      const n = { ...s };
-      for (const a of anc) n[a.id] = true;
-      return n;
-    });
+    // open the block that holds it, at a level where it is a card
+    const parent = b.parent_id ? ix.get(b.parent_id) : ix.get(graph.root_id);
+    const home = parent.level >= 3 ? ix.ancestors(b.id).find((x) => x.level === 3 && x.kind !== "file") ?? parent : parent;
+    const holder = b.level >= 4 ? ix.ancestors(b.id).filter((x) => x.level <= 3).pop()! : home;
+    setCrumbs([{ kind: "block", id: graph.root_id }, ...(holder.id !== graph.root_id ? [{ kind: "block" as const, id: holder.id }] : [])]);
+    setLevel(Math.max(b.level, Math.min(4, holder.level + 1)));
+    setShowAll({ [holder.id]: true });
     setSelected(b.id);
     setQuery("");
-    fitPending.current = false;
-    pendingCentre.current = b.id;
   };
-  useEffect(() => {
-    const id = pendingCentre.current;
-    if (!id) return;
-    const p = web.pos.get(id);
-    if (!p) return;
-    pendingCentre.current = null;
-    setTimeout(() => rf.setCenter(p.x, p.y, { zoom: 1.1, duration: 450 }), 40);
-  }, [web, rf]);
 
   // ------------------------------------------------------------- ui
-  const setLevelReset = (n: number) => {
-    setLevel(n);
-    setOpen({});
-    setShowAll({});
-  };
-
   const crumbTitle = (c: Crumb, i: number) => {
     if (c.kind === "inside") return c.title;
+    if (c.kind === "trace") return `Trace: ${ix.get(c.id).code_name}`;
     if (i === 0) return graph.name;
     return displayTitle([ix.get(c.id)]);
   };
 
-  const currentLevel = insideMode ? (insideData?.blocks[0]?.level ?? 5) : level;
+  const currentLevel = mode === "inside" ? (insideData?.blocks[0]?.level ?? 5) : level;
   const selectedBlock = selected ? ix.blocks.get(selected) ?? null : null;
   const selectedInside = !selectedBlock && insideData ? insideData.blocks.find((b) => b.id === selected) ?? null : null;
   const stats = graph.stats;
-  const shownCount = web.pos.size;
+  const shown = view ? view.cards.size : 0;
 
   return (
     <Actions.Provider value={actions}>
@@ -333,14 +323,14 @@ function Inner({ graph, onBack, onRemap }: { graph: GraphData; onBack: () => voi
             <span className="slider-label">Detail</span>
             {LEVELS.map((l) => {
               const inside = l.n >= 5;
-              const active = currentLevel === l.n;
+              const disabled = inside || mode !== "level" || (view ? l.n <= view.root.level : false);
               return (
                 <button
                   key={l.n}
-                  className={`lvl ${active ? "active" : ""} ${inside ? "inside" : ""}`}
-                  disabled={inside || insideMode}
-                  title={inside ? "Inside levels open one block at a time: drill into a function" : `Level ${l.n}: ${l.name}`}
-                  onClick={() => setLevelReset(l.n)}
+                  className={`lvl ${currentLevel === l.n ? "active" : ""} ${inside ? "inside" : ""}`}
+                  disabled={disabled}
+                  title={inside ? "Inside levels open one block at a time: double-click a function" : `Level ${l.n}: ${l.name}`}
+                  onClick={() => { setLevel(l.n); setShowAll({}); }}
                 >
                   <b>{l.n}</b> {l.name}
                 </button>
@@ -369,14 +359,14 @@ function Inner({ graph, onBack, onRemap }: { graph: GraphData; onBack: () => voi
               {i > 0 && <span className="sep">›</span>}
               <button
                 className={i === crumbs.length - 1 ? "current" : ""}
-                onClick={() => { setCrumbs(crumbs.slice(0, i + 1)); setOpen({}); setShowAll({}); setSelected(null); }}
+                onClick={() => { setCrumbs(crumbs.slice(0, i + 1)); setShowAll({}); setSelected(null); setHovered(null); }}
               >
                 {crumbTitle(c, i)}
               </button>
             </span>
           ))}
           <span className="stats">
-            {insideMode ? "" : `${shownCount} of ${graph.blocks.length} blocks shown · `}
+            {mode === "level" ? `${shown} blocks on screen · ` : ""}
             {String(stats.files ?? "?")} files · {Number(stats.lines ?? 0).toLocaleString()} lines
             {busy && " · loading…"}
           </span>
@@ -394,46 +384,38 @@ function Inner({ graph, onBack, onRemap }: { graph: GraphData; onBack: () => voi
                 on={(v) => setFilters({ ...filters, edgeKinds: { ...filters.edgeKinds, [k]: v } })} />
             ))}
             <Check id="f-maybe" label="Maybe links (guessed by name)" v={filters.maybe} on={(v) => setFilters({ ...filters, maybe: v })} />
-            <h4>Reading the web</h4>
+            <h4>How to read it</h4>
             <p className="hint">
-              The block you're in sits at the centre. Each ring is one level deeper, and each block hangs on a thread
-              from its parent. Bigger dots hold more code.
+              You see one block at a time. Lines between boxes are totals: the number says how many connections run
+              that way.
             </p>
             <p className="hint">
-              Hover or click a dot to see its connections. Double-click to open it on the next ring, or to drill
-              into a function. Zoom in to read every label.
+              Point at a card to see its own connections. Double-click to go inside. <b>Trace</b> in the side panel
+              shows who uses a block and what it uses.
             </p>
           </aside>
-          <div
-            className={`canvas ${zoomedOut ? "zoomed-out" : ""} ${focusId ? "has-focus" : ""}`}
-            // the more connections on screen, the fainter each one rests
-            style={{ ["--idle-alpha" as string]: String(Math.max(0.25, Math.min(1, 120 / Math.max(1, display.edges.length)))) }}
-          >
+          <div className={`canvas ${focusId ? "has-focus" : ""}`}>
             <ReactFlow
               nodes={nodes}
               edges={edges}
               nodeTypes={nodeTypes}
-              edgeTypes={edgeTypes}
               onPaneClick={() => setSelected(null)}
-              onMove={(_, vp) => { const far = vp.zoom < ZOOM_LABELS; if (far !== zoomedOut) setZoomedOut(far); }}
-              minZoom={0.05}
-              maxZoom={2.5}
-              fitView
-              fitViewOptions={{ padding: 0.08, maxZoom: 1.2 }}
+              minZoom={0.1}
+              maxZoom={2}
               zoomOnDoubleClick={false}
               nodesDraggable={false}
               nodesConnectable={false}
               proOptions={{ hideAttribution: true }}
             >
               <Controls showInteractive={false} />
-              {insideMode && <MiniMap pannable zoomable />}
             </ReactFlow>
-            {!busy && nodes.length === 0 && <div className="empty">Nothing to show here with the current filters.</div>}
-            {!insideMode && (
-              <div className="legend" aria-hidden>
-                {(["calls", "imports", "renders", "instantiates", "inherits"] as EdgeKind[]).filter((k) => filters.edgeKinds[k]).map((k) => (
-                  <span key={k}><i style={{ background: EDGE_COLORS[k] }} />{k}</span>
-                ))}
+            {!busy && nodes.length === 0 && (
+              <div className="empty">{mode === "trace" ? "No connections for this block with the current filters." : "Nothing to show here with the current filters."}</div>
+            )}
+            {mode === "trace" && trace && (
+              <div className="trace-legend">
+                <span>Used by · {trace.callers.reduce((s, g) => s + g.items.length, 0)}</span>
+                <span>Uses · {trace.callees.reduce((s, g) => s + g.items.length, 0)}</span>
               </div>
             )}
           </div>
@@ -441,11 +423,10 @@ function Inner({ graph, onBack, onRemap }: { graph: GraphData; onBack: () => voi
             ix={ix}
             block={selectedBlock}
             inside={selectedInside}
-            isOpen={selectedBlock ? isOpen(selectedBlock.id) : false}
             loadCode={loadCode}
             onSelect={(id) => { const b = ix.blocks.get(id); if (b) reveal(b); }}
             onDrill={drill}
-            onToggleOpen={toggleOpen}
+            onTrace={traceBlock}
             onClose={() => setSelected(null)}
           />
         </div>
@@ -454,14 +435,23 @@ function Inner({ graph, onBack, onRemap }: { graph: GraphData; onBack: () => voi
   );
 }
 
-/** The dot that stands for a block that is folded inside another one. */
-function resolveShown(ix: Index, display: ReturnType<typeof buildDisplay>, id: string): string | null {
-  let cur = ix.blocks.get(id);
-  while (cur) {
-    if (display.nodes.has(cur.id)) return cur.id;
-    cur = cur.parent_id ? ix.blocks.get(cur.parent_id) : undefined;
-  }
-  return null;
+function summedEdge(l: Link, scope: "group" | "card"): RFEdge {
+  const kind = mainKind(l);
+  const width = Math.min(1 + Math.log2(l.count + 1) * (scope === "group" ? 0.9 : 0.6), 5);
+  return {
+    id: `${scope}:${l.id}`,
+    source: l.source,
+    target: l.target,
+    className: `sum sum-${kind} ${scope} ${l.maybe ? "maybe" : ""}`,
+    style: { stroke: EDGE_COLORS[kind], strokeWidth: width },
+    markerEnd: { type: MarkerType.ArrowClosed, color: EDGE_COLORS[kind], width: 12, height: 12 },
+    label: l.count > 1 ? String(l.count) : undefined,
+    labelBgPadding: [4, 2],
+    labelBgBorderRadius: 8,
+    selectable: false,
+    focusable: false,
+    data: { kinds: l.kinds },
+  };
 }
 
 function Check({ id, label, v, on, color }: { id: string; label: string; v: boolean; on: (v: boolean) => void; color?: string }) {
@@ -473,3 +463,4 @@ function Check({ id, label, v, on, color }: { id: string; label: string; v: bool
     </label>
   );
 }
+

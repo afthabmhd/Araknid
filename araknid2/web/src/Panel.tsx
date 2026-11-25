@@ -9,9 +9,8 @@ export function Panel(props: {
   ix: Index;
   block: Block | null;
   inside: InsideBlock | null;
-  isOpen: boolean;
   loadCode: (b: Block) => Promise<string>;
-  onToggleOpen: (b: Block) => void;
+  onTrace: (b: Block) => void;
   onSelect: (id: string) => void;
   onDrill: (b: Block) => void;
   onClose: () => void;
@@ -68,13 +67,10 @@ export function Panel(props: {
       <div className="panel-meta">
         <Badges b={b} />
         <div className="panel-actions">
-          {b.children.length > 0 && b.level < 4 && (
-            <button onClick={() => props.onToggleOpen(b)}>{props.isOpen ? "Fold back" : "Open on the web"}</button>
+          {b.kind !== "asset" && b.kind !== "project" && (b.children.length > 0 || ["function", "method", "component"].includes(b.kind)) && (
+            <button onClick={() => props.onDrill(b)}>Open ›</button>
           )}
-          {b.kind === "class" && b.children.length > 0 && (
-            <button onClick={() => props.onToggleOpen(b)}>{props.isOpen ? "Fold methods" : "Show methods"}</button>
-          )}
-          {b.kind !== "asset" && b.kind !== "project" && <button onClick={() => props.onDrill(b)}>Drill in →</button>}
+          {b.kind !== "project" && <button onClick={() => props.onTrace(b)} title="Who uses this block, and what it uses">Trace connections</button>}
         </div>
       </div>
       <div className="tabs">

@@ -29,6 +29,7 @@
   --e-inherits: #7a5af5;
   --web-bg: #f8f9fb;
   --edge-idle: rgba(90, 104, 140, 0.28);
+  --frame-bg: #eef1f6;
   font-family: Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
   color: var(--text);
   background: var(--bg);
@@ -62,6 +63,7 @@
     --e-inherits: #a48bff;
     --web-bg: #0c1016;
     --edge-idle: rgba(160, 175, 210, 0.2);
+    --frame-bg: #141a24;
     color-scheme: dark;
   } }
 :root[data-theme="dark"] {
@@ -92,6 +94,7 @@
     --e-inherits: #a48bff;
     --web-bg: #0c1016;
     --edge-idle: rgba(160, 175, 210, 0.2);
+    --frame-bg: #141a24;
     color-scheme: dark;
   }
 
@@ -270,58 +273,54 @@ input[type="text"], input:not([type]) {
    but they must never swallow clicks meant for the cards under them. */
 .react-flow__edge, .react-flow__edge-interaction, .react-flow__edges svg { pointer-events: none !important; }
 
-/* ---------------------------------------------------------------- the web */
+/* ---------------------------------------------------------------- level view */
 .canvas { background: var(--web-bg); }
-.silk line, .silk path { stroke: var(--silk); stroke-width: 1; fill: none; }
-.react-flow__node-rings { pointer-events: none !important; }
-.react-flow__edge.thread path { stroke: var(--thread); stroke-width: 1; }
-.react-flow__edge.thread.lit path { stroke: var(--accent); opacity: .55; }
-/* At rest, connections are thin neutral silk; a focused block colours its own. */
-.react-flow__edge.conn path { opacity: var(--idle-alpha, 1); stroke: var(--edge-idle); transition: opacity .15s; }
-.react-flow__edge.conn.maybe path { stroke-dasharray: 3 4; }
-.react-flow__edge.conn-imports path { stroke-dasharray: 5 4; }
-.react-flow__edge.conn .react-flow__edge-path + * { opacity: .5; }
-.react-flow__edge.conn.hot path { opacity: 1; }
-.react-flow__edge.conn.faded path { opacity: .04; }
-.react-flow__edge marker, .react-flow__edge [marker-end] { opacity: inherit; }
+.card2 {
+  width: 100%; height: 100%; display: flex; align-items: center; gap: 8px; padding: 0 10px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 8px; cursor: pointer;
+  transition: opacity .15s, border-color .15s, box-shadow .15s;
+}
+.card2:hover { border-color: var(--accent); }
+.card2-icon { width: 22px; height: 22px; flex: none; display: grid; place-items: center; border-radius: 6px; font-size: 13px; background: var(--surface-2); color: var(--muted); }
+.kind-class .card2-icon { color: var(--b4); }
+.kind-function .card2-icon, .kind-method .card2-icon { color: var(--b0); }
+.kind-component .card2-icon { color: var(--b2); }
+.kind-file .card2-icon { color: var(--b1); }
+.kind-module .card2-icon, .kind-system .card2-icon { color: var(--accent); }
+.card2-text { min-width: 0; flex: 1; }
+.card2-title { font-weight: 600; font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.card2-sub { font-size: 10.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.card2-open { color: var(--muted); font-size: 16px; }
+.warn-dot { color: var(--warn); }
+.more2 { justify-content: center; color: var(--accent); font-weight: 600; font-size: 12px; border-style: dashed; }
+.frame2 { width: 100%; height: 100%; border-radius: 12px; background: var(--frame-bg); border: 1px solid var(--border); transition: opacity .15s; }
+.frame2-head { display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 10px 0 12px; cursor: pointer; }
+.frame2-title { font-weight: 700; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.frame2-meta { font-size: 11px; color: var(--muted); white-space: nowrap; }
+.frame2-head .link { margin-left: auto; font-size: 11px; white-space: nowrap; }
+.stub2 { width: 100%; height: 100%; display: flex; flex-direction: column; justify-content: center; padding: 0 12px; border: 1.5px dashed var(--border); border-radius: 22px; background: transparent; cursor: pointer; }
+.stub2-title { font-size: 12px; font-weight: 600; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.trace-centre { width: 100%; height: 100%; padding: 12px 14px; border-radius: 12px; background: var(--surface); border: 2px solid var(--accent); box-shadow: 0 0 0 5px var(--accent-soft); display: flex; flex-direction: column; justify-content: center; gap: 2px; }
+.trace-group { background: transparent; border-style: dashed; }
+.trace-legend { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); display: flex; gap: 18px; background: var(--surface); border: 1px solid var(--border); border-radius: 999px; padding: 4px 14px; font-size: 12px; color: var(--muted); }
 
-.dot-wrap { position: relative; width: 100%; height: 100%; cursor: pointer; }
-.dot { position: absolute; inset: 0; border-radius: 50%; background: var(--bc); border: 2px solid var(--web-bg); box-shadow: 0 0 0 1px var(--bc); transition: transform .12s; }
-.dot-wrap:hover .dot { transform: scale(1.25); }
-.dot.open { background: var(--web-bg); border: 3px solid var(--bc); box-shadow: 0 0 0 4px color-mix(in srgb, var(--bc) 18%, transparent); }
-.dot.dot-class { background: color-mix(in srgb, var(--bc) 25%, var(--web-bg)); border: 2.5px solid var(--bc); box-shadow: none; }
-.dot.dot-component { border-radius: 3px; transform: rotate(45deg) scale(.85); }
-.dot-wrap:hover .dot.dot-component { transform: rotate(45deg) scale(1.1); }
-.dot.dot-type { border-radius: 2px; }
-.dot.dot-file, .dot.dot-asset { opacity: .95; }
-.dot.dot-more { background: transparent; border: 1.5px dashed var(--muted); box-shadow: none; }
-.dot.dot-ghost { background: transparent; border: 1.5px dashed var(--muted); box-shadow: none; }
-.dot.partial { background: repeating-linear-gradient(45deg, var(--bc) 0 3px, var(--web-bg) 3px 5px); }
-.br-0 { --bc: var(--b0); } .br-1 { --bc: var(--b1); } .br-2 { --bc: var(--b2); } .br-3 { --bc: var(--b3); }
-.br-4 { --bc: var(--b4); } .br-5 { --bc: var(--b5); } .br-6 { --bc: var(--b6); } .br-7 { --bc: var(--b7); }
-.br-none { --bc: var(--muted); }
+/* summed connection lines */
+.react-flow__edge.sum path { transition: opacity .15s; }
+.react-flow__edge.sum.maybe path { stroke-dasharray: 3 4; }
+.react-flow__edge.sum-imports path { stroke-dasharray: 6 4; }
+.react-flow__edge.sum.group path { opacity: .55; }
+.react-flow__edge.sum.hot path { opacity: 1; }
+.react-flow__edge.sum.faded path { opacity: .08; }
+.react-flow__edge.sum.faded .react-flow__edge-textwrapper, .react-flow__edge.sum.faded text, .react-flow__edge.sum.faded rect { opacity: .1; }
+.react-flow__edge-text { font-size: 10.5px; font-weight: 600; fill: var(--text); }
+.react-flow__edge-textbg { fill: var(--surface); stroke: var(--border); }
 
-.lbl { position: absolute; left: 50%; top: 50%; display: flex; white-space: nowrap; pointer-events: none; font-size: 11px; color: var(--label); width: 400px; }
-.lbl span { text-shadow: 0 0 3px var(--label-halo), 0 0 3px var(--label-halo), 0 0 2px var(--label-halo); }
-.lbl-inner { transform: translate(-50%, 0); top: calc(100% + 4px); justify-content: center; font-weight: 650; font-size: 12.5px; }
-.lbl-outer { font-size: 11px; }
-.dot-wrap.inner .lbl-inner { top: 100%; margin-top: 4px; }
-.zoomed-out .dot-wrap.minor .lbl { display: none; }
-.react-flow__node.faded { opacity: .22; }
-.react-flow__node.faded .lbl { display: none; }
-.has-focus .react-flow__edge.thread:not(.lit) path { opacity: .35; }
-.react-flow__node.lit .lbl, .react-flow__node.focus .lbl { display: flex !important; }
-.react-flow__node.focus .dot { transform: scale(1.35); box-shadow: 0 0 0 4px color-mix(in srgb, var(--bc) 35%, transparent); }
-.react-flow__node.focus .lbl span, .react-flow__node.lit .lbl span { font-weight: 700; }
-.react-flow__node.focus { z-index: 1000 !important; }
+/* focus on demand */
+.react-flow__node.faded { opacity: .28; }
+.react-flow__node.focus .card2, .react-flow__node.focus .stub2 { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.react-flow__node.lit .card2 { border-color: color-mix(in srgb, var(--accent) 50%, var(--border)); }
+.react-flow__node-frame.faded { opacity: .5; }
 
-.hub { position: relative; width: 100%; height: 100%; cursor: pointer; }
-.hub-dot { position: absolute; inset: 0; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 6px color-mix(in srgb, var(--accent) 20%, transparent), 0 0 0 14px color-mix(in srgb, var(--accent) 8%, transparent); }
-.hub-label { position: absolute; top: calc(100% + 12px); left: 50%; transform: translateX(-50%); white-space: nowrap; font-weight: 700; font-size: 14px; color: var(--text); text-shadow: 0 0 4px var(--label-halo); }
-
-.legend { position: absolute; right: 12px; bottom: 12px; display: flex; flex-wrap: wrap; gap: 10px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; font-size: 11px; color: var(--muted); }
-.legend span { display: inline-flex; align-items: center; gap: 5px; }
-.legend i { width: 14px; height: 3px; border-radius: 2px; display: inline-block; }
 .panel-meta { padding: 0 14px 10px; display: flex; flex-direction: column; gap: 8px; }
 .panel-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .panel-actions button { padding: 4px 10px; }
