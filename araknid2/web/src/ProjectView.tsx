@@ -1,15 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  Background, Controls, MarkerType, MiniMap, ReactFlow, ReactFlowProvider, useReactFlow,
+  Controls, MarkerType, MiniMap, ReactFlow, ReactFlowProvider, useReactFlow,
   type Edge as RFEdge, type Node as RFNode,
 } from "@xyflow/react";
+import ELK from "elkjs/lib/elk.bundled.js";
 import { api } from "./api";
-import { CARD_H, CARD_W, CODE_W, layout } from "./layout";
-import { Actions, nodeTypes, type CanvasActions } from "./nodes";
+import { Actions, edgeTypes, nodeTypes, type CanvasActions } from "./nodes";
 import { Panel } from "./Panel";
+import { bundlePoint, webLayout } from "./radial";
 import type { Block, EdgeKind, GraphData, InsideBlock, InsideResult } from "./types";
 import { buildDisplay, defaultFilters, displayTitle, Index, search, type Filters } from "./view";
-import ELK from "elkjs/lib/elk.bundled.js";
 
 const LEVELS = [
   { n: 1, name: "System" },
@@ -22,13 +22,16 @@ const LEVELS = [
 ];
 
 export const EDGE_COLORS: Record<EdgeKind, string> = {
-  imports: "#8a94a6",
-  calls: "#3b82f6",
-  instantiates: "#14b8a6",
-  inherits: "#a855f7",
-  renders: "#f59e0b",
-  next: "#8a94a6",
+  imports: "var(--e-imports)",
+  calls: "var(--e-calls)",
+  instantiates: "var(--e-instantiates)",
+  inherits: "var(--e-inherits)",
+  renders: "var(--e-renders)",
+  next: "var(--e-imports)",
 };
+
+const MAJOR_LABELS = 36; // [Guess] how many outer labels stay visible when zoomed out
+const ZOOM_LABELS = 0.85; // below this zoom, minor labels hide
 
 type Crumb = { kind: "block"; id: string } | { kind: "inside"; item: InsideBlock; title: string };
 
@@ -48,18 +51,17 @@ function Inner({ graph, onBack, onRemap }: { graph: GraphData; onBack: () => voi
   const [filters, setFilters] = useState<Filters>(defaultFilters);
   const [crumbs, setCrumbs] = useState<Crumb[]>([{ kind: "block", id: graph.root_id }]);
   const [selected, setSelected] = useState<string | null>(null);
-  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
-  const [highlighted, setHighlighted] = useState<Set<string>>(new Set());
+  const [hovered, setHovered] = useState<string | null>(null);
   const [query, setQuery] = useState("");
-  const [nodes, setNodes] = useState<RFNode[]>([]);
-  const [edges, setEdges] = useState<RFEdge[]>([]);
+  const [zoomedOut, setZoomedOut] = useState(true);
+  const [insideNodes, setInsideNodes] = useState<RFNode[]>([]);
+  const [insideEdges, setInsideEdges] = useState<RFEdge[]>([]);
   const [busy, setBusy] = useState(false);
   const [insideData, setInsideData] = useState<InsideResult | null>(null);
   const codeCache = useRef(new Map<string, string>());
   const rf = useReactFlow();
   const fitPending = useRef(true);
 
-  // the innermost structural crumb, and the inside path after it
   const blockCrumbs = crumbs.filter((c): c is Extract<Crumb, { kind: "block" }> => c.kind === "block");
   const rootId = blockCrumbs[blockCrumbs.length - 1].id;
   const insideTop = crumbs[crumbs.length - 1];
@@ -69,6 +71,7 @@ function Inner({ graph, onBack, onRemap }: { graph: GraphData; onBack: () => voi
     () => buildDisplay(ix, { rootId, level, open, showAll, filters }),
     [ix, rootId, level, open, showAll, filters],
   );
+  const web = useMemo(() => webLayout(display), [display]);
 
   // ------------------------------------------------------------- actions
   const drill = useCallback((b: Block) => {
@@ -85,6 +88,7 @@ function Inner({ graph, onBack, onRemap }: { graph: GraphData; onBack: () => voi
     }
     setOpen({});
     setShowAll({});
+    setSelected(null);
   }, []);
 
   const drillInside = useCallback((ib: InsideBlock) => {
@@ -100,19 +104,113 @@ function Inner({ graph, onBack, onRemap }: { graph: GraphData; onBack: () => voi
     return res.code;
   }, [graph.project_id]);
 
+  const isOpen = useCallback((id: string) => display.nodes.get(id)?.kind === "frame", [display]);
+  const toggleOpen = useCallback((b: Block) => setOpen((o) => ({ ...o, [b.id]: !isOpen(b.id) })), [isOpen]);
+
   const actions: CanvasActions = useMemo(() => ({
-    projectId: graph.project_id,
-    selected,
-    highlighted,
-    expanded,
     select: (id) => setSelected(id),
-    toggleOpen: (b) => setOpen((o) => ({ ...o, [b.id]: !(display.nodes.get(b.id)?.kind === "frame") })),
-    toggleCode: (id) => setExpanded((e) => ({ ...e, [id]: !e[id] })),
+    hover: (id) => setHovered(id),
+    toggleOpen,
     drill,
     showAll: (owner) => setShowAll((s) => ({ ...s, [owner]: true })),
     drillInside,
-    loadCode,
-  }), [graph.project_id, selected, highlighted, expanded, display, drill, drillInside, loadCode]);
+  }), [toggleOpen, drill, drillInside]);
+
+  // ------------------------------------------------------------- the web
+  const base = useMemo(() => {
+    const nodes: RFNode[] = [];
+    const edges: RFEdge[] = [];
+    const lastRing = web.rings[web.rings.length - 1] ?? 0;
+    // the silk: spokes at each first-ring block (at least 8) and rings between them
+    const firstRing = [...web.pos.values()].filter((p) => p.depth === 1).map((p) => p.angle);
+    let spokes = [...firstRing].sort((a, b) => a - b);
+    if (spokes.length < 8) spokes = Array.from({ length: 12 }, (_, i) => -Math.PI / 2 + (i / 12) * 2 * Math.PI);
+    if (web.rings.length > 1) {
+      nodes.push({
+        id: "__rings__", type: "rings", position: { x: -(lastRing + 60), y: -(lastRing + 60) },
+        data: { rings: web.rings, spokes }, draggable: false, selectable: false, focusable: false, zIndex: -1,
+        style: { pointerEvents: "none" },
+      });
+    }
+    nodes.push({
+      id: "__hub__", type: "hub", position: { x: -16, y: -16 }, data: { block: display.effectiveRoot },
+      draggable: false, selectable: false, style: { width: 32, height: 32, pointerEvents: "all" },
+    });
+
+    // label budget: inner rings always, outer leaves only the most important
+    const leaves = [...display.nodes.values()].filter((n) => n.kind === "card" && n.block);
+    const major = new Set(
+      [...leaves].sort((a, b) => (b.block!.importance - a.block!.importance) || (b.block!.loc - a.block!.loc))
+        .slice(0, MAJOR_LABELS).map((n) => n.id),
+    );
+
+    for (const [id, p] of web.pos) {
+      const n = display.nodes.get(id)!;
+      const outer = n.kind !== "frame";
+      nodes.push({
+        id, type: "web",
+        position: { x: p.x - p.r, y: p.y - p.r },
+        data: { node: n, pos: p, outer, minor: outer && !major.has(id) && p.depth > 1 },
+        // React Flow turns pointer events off on nodes it can't drag or select
+        style: { width: p.r * 2, height: p.r * 2, pointerEvents: "all" },
+        draggable: false, selectable: false,
+      });
+      edges.push({
+        id: `t:${id}`, source: n.parent ?? "__hub__", target: id, type: "thread",
+        className: "thread", selectable: false, focusable: false,
+      });
+    }
+
+    for (const e of display.edges) {
+      if (!web.pos.has(e.source) || !web.pos.has(e.target)) continue;
+      const c = bundlePoint(display, web, e.source, e.target);
+      edges.push({
+        id: e.id, source: e.source, target: e.target, type: "bundled",
+        data: { cx: c.x, cy: c.y, kind: e.kind },
+        className: `conn conn-${e.kind} ${e.maybe ? "maybe" : ""}`,
+        style: { strokeWidth: Math.min(0.7 + Math.log2(e.count + 1) * 0.5, 3) },
+        selectable: false, focusable: false,
+      });
+    }
+    return { nodes, edges };
+  }, [web, display]);
+
+  // Focus mode: hovering or selecting a block lights it, its connections and
+  // its parents, and fades everything else back into the web.
+  const focusId = hovered ?? selected;
+  const { nodes, edges } = useMemo(() => {
+    if (insideMode) return { nodes: insideNodes, edges: insideEdges };
+    const focus = focusId ? (display.nodes.has(focusId) ? focusId : resolveShown(ix, display, focusId)) : null;
+    if (!focus) return base;
+    const lit = new Set<string>([focus]);
+    let cur = display.nodes.get(focus)?.parent ?? null;
+    while (cur) { lit.add(cur); cur = display.nodes.get(cur)?.parent ?? null; }
+    const hotEdges = new Set<string>();
+    for (const e of display.edges) {
+      if (e.source === focus || e.target === focus) {
+        hotEdges.add(e.id);
+        lit.add(e.source);
+        lit.add(e.target);
+      }
+    }
+    return {
+      nodes: base.nodes.map((n) => n.type !== "web" ? n : {
+        ...n, className: n.id === focus ? "focus" : lit.has(n.id) ? "lit" : "faded",
+      }),
+      edges: base.edges.map((e) => {
+        if (e.type === "thread") return lit.has(e.target) ? { ...e, className: "thread lit" } : e;
+        if (!hotEdges.has(e.id)) return { ...e, className: `${e.className} faded` };
+        const kind = (e.data as { kind: EdgeKind }).kind;
+        return {
+          ...e,
+          className: `${e.className} hot`,
+          style: { ...e.style, stroke: EDGE_COLORS[kind], strokeWidth: Number(e.style?.strokeWidth ?? 1) + 0.6 },
+          markerEnd: { type: MarkerType.ArrowClosed, color: EDGE_COLORS[kind], width: 12, height: 12 },
+          zIndex: 5,
+        };
+      }),
+    };
+  }, [base, focusId, display, ix, insideMode, insideNodes, insideEdges]);
 
   // ------------------------------------------------------------- inside levels
   useEffect(() => {
@@ -130,114 +228,58 @@ function Inner({ graph, onBack, onRemap }: { graph: GraphData; onBack: () => voi
     return () => { live = false; };
   }, [insideTop, graph.project_id]);
 
-  // ------------------------------------------------------------- layout
   useEffect(() => {
+    if (!insideMode || !insideData) {
+      setInsideNodes([]);
+      setInsideEdges([]);
+      return;
+    }
     let live = true;
-    const run = async () => {
-      setBusy(true);
-      if (insideMode) {
-        if (!insideData) return;
-        const elk = new ELK();
-        const sized = insideData.blocks.map((b) => {
-          const lines = Math.min(b.code.split("\n").length, 14);
-          return { id: b.id, width: 520, height: 46 + lines * 16 + 14 };
-        });
-        const res = await elk.layout({
-          id: "root",
-          layoutOptions: { "elk.algorithm": "layered", "elk.direction": "DOWN", "elk.spacing.nodeNode": "24", "elk.layered.spacing.nodeNodeBetweenLayers": "30" },
-          children: sized,
-          edges: insideData.edges.map((e, i) => ({ id: `e${i}`, sources: [e.source], targets: [e.target] })),
-        });
-        if (!live) return;
-        const byId = new Map(insideData.blocks.map((b) => [b.id, b]));
-        setNodes((res.children ?? []).map((c) => ({
-          id: c.id, type: "inside", position: { x: c.x ?? 0, y: c.y ?? 0 },
-          data: { inside: byId.get(c.id) }, style: { width: c.width, height: c.height },
-        })));
-        setEdges(insideData.edges.map((e, i) => ({
-          id: `ie${i}`, source: e.source, target: e.target, type: "smoothstep",
-          style: { stroke: EDGE_COLORS.next }, markerEnd: { type: MarkerType.ArrowClosed, color: EDGE_COLORS.next },
-        })));
-      } else {
-        const sizeOf = (id: string) => {
-          const n = display.nodes.get(id)!;
-          if (n.kind === "more" || n.kind === "ghost") return { w: 170, h: 56 };
-          const b = n.block!;
-          if (expanded[b.id]) {
-            const lines = Math.min((b.end_line ?? 1) - (b.start_line ?? 1) + 1, 24);
-            return { w: CODE_W, h: CARD_H + 16 + lines * 16 + 16 };
-          }
-          return { w: CARD_W, h: CARD_H };
-        };
-        const placed = await layout(display, sizeOf);
-        if (!live) return;
-        const rfNodes: RFNode[] = [];
-        const visit = (id: string) => {
-          const n = display.nodes.get(id)!;
-          const p = placed.get(id);
-          if (!p) return;
-          rfNodes.push({
-            id,
-            type: n.kind,
-            position: { x: p.x, y: p.y },
-            parentId: n.parent ?? undefined,
-            data: { node: n },
-            style: { width: p.w, height: p.h },
-            draggable: true,
-            selectable: false,
-            zIndex: n.kind === "frame" ? 0 : 1,
-          });
-          for (const c of n.children) visit(c);
-        };
-        for (const r of display.roots) visit(r);
-        setNodes(rfNodes);
-        setEdges(display.edges.map((e) => ({
-          id: e.id,
-          source: e.source,
-          target: e.target,
-          label: e.count > 1 ? String(e.count) : undefined,
-          style: {
-            stroke: EDGE_COLORS[e.kind],
-            strokeWidth: Math.min(1 + Math.log2(e.count + 1) * 0.7, 4),
-            strokeDasharray: e.kind === "imports" ? "5 4" : e.maybe ? "2 4" : undefined,
-            opacity: e.maybe ? 0.6 : 0.9,
-          },
-          markerEnd: { type: MarkerType.ArrowClosed, color: EDGE_COLORS[e.kind], width: 14, height: 14 },
-          zIndex: 2,
-          data: { kind: e.kind },
-        })));
-      }
-      setBusy(false);
-    };
-    run();
+    const elk = new ELK();
+    const sized = insideData.blocks.map((b) => {
+      const lines = Math.min(b.code.split("\n").length, 14);
+      return { id: b.id, width: 520, height: 46 + lines * 16 + 14 };
+    });
+    elk.layout({
+      id: "root",
+      layoutOptions: { "elk.algorithm": "layered", "elk.direction": "DOWN", "elk.spacing.nodeNode": "24", "elk.layered.spacing.nodeNodeBetweenLayers": "30" },
+      children: sized,
+      edges: insideData.edges.map((e, i) => ({ id: `e${i}`, sources: [e.source], targets: [e.target] })),
+    }).then((res) => {
+      if (!live) return;
+      const byId = new Map(insideData.blocks.map((b) => [b.id, b]));
+      setInsideNodes((res.children ?? []).map((c) => ({
+        id: c.id, type: "inside", position: { x: c.x ?? 0, y: c.y ?? 0 },
+        data: { inside: byId.get(c.id) }, style: { width: c.width, height: c.height, pointerEvents: "all" }, draggable: false,
+      })));
+      setInsideEdges(insideData.edges.map((e, i) => ({
+        id: `ie${i}`, source: e.source, target: e.target, type: "smoothstep",
+        style: { stroke: EDGE_COLORS.next }, markerEnd: { type: MarkerType.ArrowClosed },
+      })));
+    });
     return () => { live = false; };
-  }, [display, expanded, insideMode, insideData, rf]);
+  }, [insideMode, insideData]);
 
-  // A new canvas starts empty so the fit below waits for its own nodes.
+  // ------------------------------------------------------------- fitting the view
   useEffect(() => {
-    setNodes([]);
-    setEdges([]);
     fitPending.current = true;
   }, [crumbs, level]);
-
-  // Fit the view after a new canvas has rendered (drill, level change).
   useEffect(() => {
     if (!fitPending.current || nodes.length === 0) return;
+    if (insideMode && !insideNodes.length) return;
     fitPending.current = false;
-    const t = setTimeout(() => rf.fitView({ padding: 0.12, duration: 300, maxZoom: 1.1 }), 60);
+    const t = setTimeout(() => rf.fitView({ padding: 0.08, duration: 350, maxZoom: 1.2 }), 150);
     return () => clearTimeout(t);
-  }, [nodes, rf]);
+  }, [nodes, rf, insideMode, insideNodes.length]);
 
   // ------------------------------------------------------------- search
   const results = useMemo(() => search(ix, query, filters), [ix, query, filters]);
+  const pendingCentre = useRef<string | null>(null);
   const reveal = (b: Block) => {
-    // open every ancestor so the block is visible, then focus it
     const anc = ix.ancestors(b.id).slice(0, -1);
     const root = ix.ancestors(rootId);
     const inRoot = root.every((r, i) => anc[i]?.id === r.id) || b.id === rootId;
-    if (!inRoot || insideMode) {
-      setCrumbs([{ kind: "block", id: graph.root_id }]);
-    }
+    if (!inRoot || insideMode) setCrumbs([{ kind: "block", id: graph.root_id }]);
     setOpen((o) => {
       const n = { ...o };
       for (const a of anc) n[a.id] = true;
@@ -249,33 +291,37 @@ function Inner({ graph, onBack, onRemap }: { graph: GraphData; onBack: () => voi
       return n;
     });
     setSelected(b.id);
-    setHighlighted(new Set([b.id]));
     setQuery("");
-    setTimeout(() => {
-      const node = rf.getNode(b.id) ?? anc.reverse().map((a) => rf.getNode(a.id)).find(Boolean);
-      if (node) rf.fitView({ nodes: [{ id: node.id }], padding: 0.6, duration: 400, maxZoom: 1.2 });
-    }, 350);
+    fitPending.current = false;
+    pendingCentre.current = b.id;
   };
+  useEffect(() => {
+    const id = pendingCentre.current;
+    if (!id) return;
+    const p = web.pos.get(id);
+    if (!p) return;
+    pendingCentre.current = null;
+    setTimeout(() => rf.setCenter(p.x, p.y, { zoom: 1.1, duration: 450 }), 40);
+  }, [web, rf]);
 
   // ------------------------------------------------------------- ui
   const setLevelReset = (n: number) => {
     setLevel(n);
     setOpen({});
     setShowAll({});
-    fitPending.current = true;
   };
 
   const crumbTitle = (c: Crumb, i: number) => {
     if (c.kind === "inside") return c.title;
-    const b = ix.get(c.id);
     if (i === 0) return graph.name;
-    return displayTitle([b]);
+    return displayTitle([ix.get(c.id)]);
   };
 
   const currentLevel = insideMode ? (insideData?.blocks[0]?.level ?? 5) : level;
   const selectedBlock = selected ? ix.blocks.get(selected) ?? null : null;
   const selectedInside = !selectedBlock && insideData ? insideData.blocks.find((b) => b.id === selected) ?? null : null;
   const stats = graph.stats;
+  const shownCount = web.pos.size;
 
   return (
     <Actions.Provider value={actions}>
@@ -323,68 +369,83 @@ function Inner({ graph, onBack, onRemap }: { graph: GraphData; onBack: () => voi
               {i > 0 && <span className="sep">›</span>}
               <button
                 className={i === crumbs.length - 1 ? "current" : ""}
-                onClick={() => { fitPending.current = true; setCrumbs(crumbs.slice(0, i + 1)); setOpen({}); setShowAll({}); }}
+                onClick={() => { setCrumbs(crumbs.slice(0, i + 1)); setOpen({}); setShowAll({}); setSelected(null); }}
               >
                 {crumbTitle(c, i)}
               </button>
             </span>
           ))}
           <span className="stats">
-            {String(stats.files ?? "?")} files · {Number(stats.lines ?? 0).toLocaleString()} lines · {graph.blocks.length} blocks · mapped in {String(stats.map_seconds ?? "?")}s
-            {busy && " · laying out…"}
+            {insideMode ? "" : `${shownCount} of ${graph.blocks.length} blocks shown · `}
+            {String(stats.files ?? "?")} files · {Number(stats.lines ?? 0).toLocaleString()} lines
+            {busy && " · loading…"}
           </span>
         </nav>
 
         <div className="main">
           <aside className="filters">
             <h4>Show</h4>
-            <Check label="Tests" v={filters.tests} on={(v) => setFilters({ ...filters, tests: v })} />
-            <Check label="Other files (config, docs)" v={filters.assets} on={(v) => setFilters({ ...filters, assets: v })} />
-            <Check label="Type declarations" v={filters.types} on={(v) => setFilters({ ...filters, types: v })} />
+            <Check id="f-tests" label="Tests" v={filters.tests} on={(v) => setFilters({ ...filters, tests: v })} />
+            <Check id="f-assets" label="Other files (config, docs)" v={filters.assets} on={(v) => setFilters({ ...filters, assets: v })} />
+            <Check id="f-types" label="Type declarations" v={filters.types} on={(v) => setFilters({ ...filters, types: v })} />
             <h4>Connections</h4>
             {(["calls", "imports", "renders", "instantiates", "inherits"] as EdgeKind[]).map((k) => (
-              <Check key={k} label={k} color={EDGE_COLORS[k]} v={filters.edgeKinds[k]}
+              <Check key={k} id={`f-${k}`} label={k} color={EDGE_COLORS[k]} v={filters.edgeKinds[k]}
                 on={(v) => setFilters({ ...filters, edgeKinds: { ...filters.edgeKinds, [k]: v } })} />
             ))}
-            <Check label="Maybe links (guessed by name)" v={filters.maybe} on={(v) => setFilters({ ...filters, maybe: v })} />
+            <Check id="f-maybe" label="Maybe links (guessed by name)" v={filters.maybe} on={(v) => setFilters({ ...filters, maybe: v })} />
+            <h4>Reading the web</h4>
             <p className="hint">
-              Double-click a card to open it in place. <b>Drill in</b> gives a block its own canvas. Functions drill into
-              sections and statements.
+              The block you're in sits at the centre. Each ring is one level deeper, and each block hangs on a thread
+              from its parent. Bigger dots hold more code.
+            </p>
+            <p className="hint">
+              Hover or click a dot to see its connections. Double-click to open it on the next ring, or to drill
+              into a function. Zoom in to read every label.
             </p>
           </aside>
-          <div className="canvas">
+          <div
+            className={`canvas ${zoomedOut ? "zoomed-out" : ""} ${focusId ? "has-focus" : ""}`}
+            // the more connections on screen, the fainter each one rests
+            style={{ ["--idle-alpha" as string]: String(Math.max(0.25, Math.min(1, 120 / Math.max(1, display.edges.length)))) }}
+          >
             <ReactFlow
               nodes={nodes}
               edges={edges}
               nodeTypes={nodeTypes}
-              onNodesChange={(changes) => {
-                // positions only: we own the layout
-                if (!changes.some((c) => c.type === "position")) return;
-                setNodes((ns) => ns.map((n) => {
-                  const ch = changes.find((c) => c.type === "position" && c.id === n.id) as { position?: { x: number; y: number } } | undefined;
-                  return ch?.position ? { ...n, position: ch.position } : n;
-                }));
-              }}
-              onPaneClick={() => { setSelected(null); setHighlighted(new Set()); }}
+              edgeTypes={edgeTypes}
+              onPaneClick={() => setSelected(null)}
+              onMove={(_, vp) => { const far = vp.zoom < ZOOM_LABELS; if (far !== zoomedOut) setZoomedOut(far); }}
               minZoom={0.05}
-              maxZoom={2}
+              maxZoom={2.5}
+              fitView
+              fitViewOptions={{ padding: 0.08, maxZoom: 1.2 }}
+              zoomOnDoubleClick={false}
+              nodesDraggable={false}
+              nodesConnectable={false}
               proOptions={{ hideAttribution: true }}
-              onlyRenderVisibleElements
             >
-              <Background gap={24} size={1} />
               <Controls showInteractive={false} />
-              <MiniMap pannable zoomable nodeStrokeWidth={2} />
+              {insideMode && <MiniMap pannable zoomable />}
             </ReactFlow>
             {!busy && nodes.length === 0 && <div className="empty">Nothing to show here with the current filters.</div>}
+            {!insideMode && (
+              <div className="legend" aria-hidden>
+                {(["calls", "imports", "renders", "instantiates", "inherits"] as EdgeKind[]).filter((k) => filters.edgeKinds[k]).map((k) => (
+                  <span key={k}><i style={{ background: EDGE_COLORS[k] }} />{k}</span>
+                ))}
+              </div>
+            )}
           </div>
           <Panel
-            projectId={graph.project_id}
             ix={ix}
             block={selectedBlock}
             inside={selectedInside}
+            isOpen={selectedBlock ? isOpen(selectedBlock.id) : false}
             loadCode={loadCode}
             onSelect={(id) => { const b = ix.blocks.get(id); if (b) reveal(b); }}
             onDrill={drill}
+            onToggleOpen={toggleOpen}
             onClose={() => setSelected(null)}
           />
         </div>
@@ -393,10 +454,20 @@ function Inner({ graph, onBack, onRemap }: { graph: GraphData; onBack: () => voi
   );
 }
 
-function Check({ label, v, on, color }: { label: string; v: boolean; on: (v: boolean) => void; color?: string }) {
+/** The dot that stands for a block that is folded inside another one. */
+function resolveShown(ix: Index, display: ReturnType<typeof buildDisplay>, id: string): string | null {
+  let cur = ix.blocks.get(id);
+  while (cur) {
+    if (display.nodes.has(cur.id)) return cur.id;
+    cur = cur.parent_id ? ix.blocks.get(cur.parent_id) : undefined;
+  }
+  return null;
+}
+
+function Check({ id, label, v, on, color }: { id: string; label: string; v: boolean; on: (v: boolean) => void; color?: string }) {
   return (
-    <label className="check">
-      <input type="checkbox" checked={v} onChange={(e) => on(e.target.checked)} />
+    <label className="check" htmlFor={id}>
+      <input id={id} type="checkbox" checked={v} onChange={(e) => on(e.target.checked)} />
       {color && <span className="swatch" style={{ background: color }} />}
       {label}
     </label>

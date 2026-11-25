@@ -16,6 +16,19 @@
   --code-bg: #f7f8fa;
   --sel: #4f46e5;
   --hl: #f59e0b;
+  /* web: branch colours (one per first-ring block), silk and connections */
+  --b0: #4f6bed; --b1: #0f9d8a; --b2: #d9822b; --b3: #c2417a; --b4: #7a5af5; --b5: #2f9e44; --b6: #c25e3a; --b7: #3b8fc2;
+  --silk: rgba(80, 90, 120, 0.16);
+  --thread: rgba(80, 90, 120, 0.22);
+  --label: #2b3445;
+  --label-halo: rgba(246, 247, 249, 0.92);
+  --e-calls: #4f6bed;
+  --e-imports: #8792a8;
+  --e-renders: #d9822b;
+  --e-instantiates: #0f9d8a;
+  --e-inherits: #7a5af5;
+  --web-bg: #f8f9fb;
+  --edge-idle: rgba(90, 104, 140, 0.28);
   font-family: Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
   color: var(--text);
   background: var(--bg);
@@ -37,6 +50,18 @@
     --frame-file: #12161e;
     --frame-class: #1d1730;
     --code-bg: #10141b;
+    --b0: #7d93ff; --b1: #3cc9b4; --b2: #f0a35a; --b3: #ec6ea6; --b4: #a48bff; --b5: #5cc770; --b6: #f08a62; --b7: #6ab8e8;
+    --silk: rgba(170, 185, 220, 0.10);
+    --thread: rgba(170, 185, 220, 0.18);
+    --label: #d5dbe6;
+    --label-halo: rgba(15, 19, 26, 0.9);
+    --e-calls: #7d93ff;
+    --e-imports: #7d879b;
+    --e-renders: #f0a35a;
+    --e-instantiates: #3cc9b4;
+    --e-inherits: #a48bff;
+    --web-bg: #0c1016;
+    --edge-idle: rgba(160, 175, 210, 0.2);
     color-scheme: dark;
   } }
 :root[data-theme="dark"] {
@@ -55,6 +80,18 @@
     --frame-file: #12161e;
     --frame-class: #1d1730;
     --code-bg: #10141b;
+    --b0: #7d93ff; --b1: #3cc9b4; --b2: #f0a35a; --b3: #ec6ea6; --b4: #a48bff; --b5: #5cc770; --b6: #f08a62; --b7: #6ab8e8;
+    --silk: rgba(170, 185, 220, 0.10);
+    --thread: rgba(170, 185, 220, 0.18);
+    --label: #d5dbe6;
+    --label-halo: rgba(15, 19, 26, 0.9);
+    --e-calls: #7d93ff;
+    --e-imports: #7d879b;
+    --e-renders: #f0a35a;
+    --e-instantiates: #3cc9b4;
+    --e-inherits: #a48bff;
+    --web-bg: #0c1016;
+    --edge-idle: rgba(160, 175, 210, 0.2);
     color-scheme: dark;
   }
 
@@ -232,3 +269,59 @@ input[type="text"], input:not([type]) {
 /* Edges are drawn above frames so links into nested blocks stay visible,
    but they must never swallow clicks meant for the cards under them. */
 .react-flow__edge, .react-flow__edge-interaction, .react-flow__edges svg { pointer-events: none !important; }
+
+/* ---------------------------------------------------------------- the web */
+.canvas { background: var(--web-bg); }
+.silk line, .silk path { stroke: var(--silk); stroke-width: 1; fill: none; }
+.react-flow__node-rings { pointer-events: none !important; }
+.react-flow__edge.thread path { stroke: var(--thread); stroke-width: 1; }
+.react-flow__edge.thread.lit path { stroke: var(--accent); opacity: .55; }
+/* At rest, connections are thin neutral silk; a focused block colours its own. */
+.react-flow__edge.conn path { opacity: var(--idle-alpha, 1); stroke: var(--edge-idle); transition: opacity .15s; }
+.react-flow__edge.conn.maybe path { stroke-dasharray: 3 4; }
+.react-flow__edge.conn-imports path { stroke-dasharray: 5 4; }
+.react-flow__edge.conn .react-flow__edge-path + * { opacity: .5; }
+.react-flow__edge.conn.hot path { opacity: 1; }
+.react-flow__edge.conn.faded path { opacity: .04; }
+.react-flow__edge marker, .react-flow__edge [marker-end] { opacity: inherit; }
+
+.dot-wrap { position: relative; width: 100%; height: 100%; cursor: pointer; }
+.dot { position: absolute; inset: 0; border-radius: 50%; background: var(--bc); border: 2px solid var(--web-bg); box-shadow: 0 0 0 1px var(--bc); transition: transform .12s; }
+.dot-wrap:hover .dot { transform: scale(1.25); }
+.dot.open { background: var(--web-bg); border: 3px solid var(--bc); box-shadow: 0 0 0 4px color-mix(in srgb, var(--bc) 18%, transparent); }
+.dot.dot-class { background: color-mix(in srgb, var(--bc) 25%, var(--web-bg)); border: 2.5px solid var(--bc); box-shadow: none; }
+.dot.dot-component { border-radius: 3px; transform: rotate(45deg) scale(.85); }
+.dot-wrap:hover .dot.dot-component { transform: rotate(45deg) scale(1.1); }
+.dot.dot-type { border-radius: 2px; }
+.dot.dot-file, .dot.dot-asset { opacity: .95; }
+.dot.dot-more { background: transparent; border: 1.5px dashed var(--muted); box-shadow: none; }
+.dot.dot-ghost { background: transparent; border: 1.5px dashed var(--muted); box-shadow: none; }
+.dot.partial { background: repeating-linear-gradient(45deg, var(--bc) 0 3px, var(--web-bg) 3px 5px); }
+.br-0 { --bc: var(--b0); } .br-1 { --bc: var(--b1); } .br-2 { --bc: var(--b2); } .br-3 { --bc: var(--b3); }
+.br-4 { --bc: var(--b4); } .br-5 { --bc: var(--b5); } .br-6 { --bc: var(--b6); } .br-7 { --bc: var(--b7); }
+.br-none { --bc: var(--muted); }
+
+.lbl { position: absolute; left: 50%; top: 50%; display: flex; white-space: nowrap; pointer-events: none; font-size: 11px; color: var(--label); width: 400px; }
+.lbl span { text-shadow: 0 0 3px var(--label-halo), 0 0 3px var(--label-halo), 0 0 2px var(--label-halo); }
+.lbl-inner { transform: translate(-50%, 0); top: calc(100% + 4px); justify-content: center; font-weight: 650; font-size: 12.5px; }
+.lbl-outer { font-size: 11px; }
+.dot-wrap.inner .lbl-inner { top: 100%; margin-top: 4px; }
+.zoomed-out .dot-wrap.minor .lbl { display: none; }
+.react-flow__node.faded { opacity: .22; }
+.react-flow__node.faded .lbl { display: none; }
+.has-focus .react-flow__edge.thread:not(.lit) path { opacity: .35; }
+.react-flow__node.lit .lbl, .react-flow__node.focus .lbl { display: flex !important; }
+.react-flow__node.focus .dot { transform: scale(1.35); box-shadow: 0 0 0 4px color-mix(in srgb, var(--bc) 35%, transparent); }
+.react-flow__node.focus .lbl span, .react-flow__node.lit .lbl span { font-weight: 700; }
+.react-flow__node.focus { z-index: 1000 !important; }
+
+.hub { position: relative; width: 100%; height: 100%; cursor: pointer; }
+.hub-dot { position: absolute; inset: 0; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 6px color-mix(in srgb, var(--accent) 20%, transparent), 0 0 0 14px color-mix(in srgb, var(--accent) 8%, transparent); }
+.hub-label { position: absolute; top: calc(100% + 12px); left: 50%; transform: translateX(-50%); white-space: nowrap; font-weight: 700; font-size: 14px; color: var(--text); text-shadow: 0 0 4px var(--label-halo); }
+
+.legend { position: absolute; right: 12px; bottom: 12px; display: flex; flex-wrap: wrap; gap: 10px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; font-size: 11px; color: var(--muted); }
+.legend span { display: inline-flex; align-items: center; gap: 5px; }
+.legend i { width: 14px; height: 3px; border-radius: 2px; display: inline-block; }
+.panel-meta { padding: 0 14px 10px; display: flex; flex-direction: column; gap: 8px; }
+.panel-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.panel-actions button { padding: 4px 10px; }

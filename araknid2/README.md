@@ -9,9 +9,11 @@ This first slice is the **code web**: it covers the Phase 0 graph engine spike a
   the machine running the server.
 - Araknid's own graph engine maps it with tree-sitter into the unified block model: one record type with a parent,
   a level, hashes and line ranges, plus edges (imports, calls, instantiates, inherits, renders).
-- The web client shows it with React Flow and ELK auto layout. It has a detail slider (levels 1 to 4), mixed detail
-  (open one block in place), drilling in with a breadcrumb, inline code on any block, search, filters, and the
-  inside levels 5 to 7 (sections, statements, expressions), which are built on demand when you drill into a function.
+- The web client draws it as a **spiderweb** (React Flow). The block you're in sits at the centre, each level is a
+  ring, and every block hangs on a thread from its parent. Connections are bundled towards their shared parent and
+  rest as faint silk until you hover or select a block, which lights its connections and fades the rest. It also has
+  a detail slider (levels 1 to 4), opening a block onto the next ring, drilling in with a breadcrumb, search,
+  filters, and the inside levels 5 to 7 (sections, statements, expressions), built on demand for a function.
 
 ## Run it
 
@@ -63,7 +65,7 @@ araknid2/
     api.py       FastAPI endpoints
   web/src/
     view.ts      display tree: slider, pass-through collapse, "+ N more", edge roll-up, ghost stubs
-    layout.ts    ELK layout per frame
+    radial.ts    the spiderweb layout: rings, wedges by size, edge bundling
     ProjectView.tsx, nodes.tsx, Panel.tsx, ImportScreen.tsx
 ```
 
@@ -84,6 +86,8 @@ araknid2/
 
 ## Guesses and gaps (to confirm)
 
+- **[Guess]** Web layout constants: 30 px between dots on a ring, 170 px between rings, 36 outer labels kept when
+  zoomed out, labels hide below 85% zoom.
 - **[Guess]** "+ N more" folds after 30 children, sections start at 40 lines or more than 3 control structures, and a
   file counts as `few_blocks` when it has over 300 lines and no definitions.
 - **[Guess]** Level 0 "project" is an extra root above the System blocks, so the tree has a single root.

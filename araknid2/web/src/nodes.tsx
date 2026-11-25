@@ -1,32 +1,28 @@
-import { createContext, memo, useContext, useEffect, useState } from "react";
-import { Handle, Position, type NodeProps } from "@xyflow/react";
+import { createContext, memo, useContext } from "react";
+import { BaseEdge, Handle, Position, type EdgeProps, type NodeProps } from "@xyflow/react";
 import type { Block, InsideBlock } from "./types";
 import { displayTitle, humanTitle, type DisplayNode } from "./view";
+import type { WebPos } from "./radial";
 
 export interface CanvasActions {
-  projectId: string;
-  selected: string | null;
-  highlighted: Set<string>;
-  expanded: Record<string, boolean>;
   select: (id: string) => void;
+  hover: (id: string | null) => void;
   toggleOpen: (b: Block) => void;
-  toggleCode: (id: string) => void;
   drill: (b: Block) => void;
   showAll: (ownerId: string) => void;
   drillInside: (b: InsideBlock) => void;
-  loadCode: (b: Block) => Promise<string>;
 }
 
 export const Actions = createContext<CanvasActions | null>(null);
 const useActions = () => useContext(Actions)!;
 
-const KIND_LABEL: Record<string, string> = {
-  system: "System", module: "Module", file: "File", asset: "File", class: "Class", function: "Function",
-  method: "Method", component: "Component", type: "Type", suggested_group: "Group",
+export const KIND_LABEL: Record<string, string> = {
+  project: "Project", system: "System", module: "Module", file: "File", asset: "File", class: "Class",
+  function: "Function", method: "Method", component: "Component", type: "Type", suggested_group: "Group",
   section: "Section", statement: "Statement", expression: "Expression",
 };
 
-function Badges({ b }: { b: Block }) {
+export function Badges({ b }: { b: Block }) {
   return (
     <div className="badges">
       <span className={`badge kind kind-${b.kind}`}>{KIND_LABEL[b.kind] ?? b.kind}</span>
@@ -42,71 +38,120 @@ function Badges({ b }: { b: Block }) {
   );
 }
 
-export const FrameNode = memo(({ data }: NodeProps) => {
-  const a = useActions();
-  const n = data.node as DisplayNode;
-  const b = n.block!;
-  const sel = a.selected === b.id;
-  return (
-    <div className={`frame frame-${b.kind} ${sel ? "selected" : ""} ${a.highlighted.has(b.id) ? "hl" : ""}`}>
-      <Handle type="target" position={Position.Left} className="h" />
-      <div className="frame-head" onClick={(e) => { e.stopPropagation(); a.select(b.id); }}>
-        <button className="icon" title="Close this block" onClick={(e) => { e.stopPropagation(); a.toggleOpen(b); }}>▾</button>
-        <span className="frame-title">{displayTitle(n.chain)}</span>
-        <span className="frame-meta">{KIND_LABEL[b.kind]} · {b.loc} loc</span>
-        <button className="link" title="Open this block on its own canvas" onClick={(e) => { e.stopPropagation(); a.drill(b); }}>Drill in →</button>
-      </div>
-      <Handle type="source" position={Position.Right} className="h" />
-    </div>
-  );
-});
+// ------------------------------------------------------------------ web nodes
 
-export const CardNode = memo(({ data }: NodeProps) => {
+const centred = { left: "50%", top: "50%", transform: "translate(-50%, -50%)" };
+
+/** One block on the web: a dot sized by its code, with a label beside it. */
+export const WebNode = memo(({ data }: NodeProps) => {
   const a = useActions();
   const n = data.node as DisplayNode;
-  const b = n.block!;
-  const showCode = a.expanded[b.id];
-  const chainTitle = n.chain.length > 1 ? displayTitle(n.chain) : null;
-  const canOpen = b.children.length > 0;
-  const isDef = b.level >= 4;
+  const p = data.pos as WebPos;
+  const outer = data.outer as boolean;
+  const minor = data.minor as boolean;
+  const b = n.block;
+  const isMore = n.kind === "more";
+  const isGhost = n.kind === "ghost";
+  const label = isMore ? `+${n.moreCount} more` : isGhost ? `↗ ${b!.code_name}` : displayTitle(n.chain);
+
+  // Outer-ring labels run along their thread, like a radial dendrogram;
+  // labels on the left half are flipped so they never read upside down.
+  const deg = (p.angle * 180) / Math.PI;
+  const left = Math.cos(p.angle) < 0;
+  const labelStyle = outer
+    ? {
+        transform: `translate(-50%, -50%) rotate(${left ? deg + 180 : deg}deg) translateX(${left ? -(p.r + 6) : p.r + 6}px)`,
+        transformOrigin: "50% 50%",
+        justifyContent: left ? "flex-end" : "flex-start",
+      }
+    : undefined;
+
   return (
     <div
-      className={`card card-${b.kind} ${a.selected === b.id ? "selected" : ""} ${a.highlighted.has(b.id) ? "hl" : ""} ${showCode ? "with-code" : ""}`}
-      onClick={() => a.select(b.id)}
-      onDoubleClick={(e) => { e.stopPropagation(); if (canOpen && !isDef) a.toggleOpen(b); else if (b.kind !== "asset") a.drill(b); }}
+      className={`dot-wrap ${outer ? "outer" : "inner"} ${minor ? "minor" : ""} ${p.branch >= 0 ? `br-${p.branch % 8}` : "br-none"}`}
+      onClick={(e) => { e.stopPropagation(); if (isMore) a.showAll(n.moreOf!); else if (b) a.select(b.id); }}
+      onDoubleClick={(e) => {
+        e.stopPropagation();
+        if (!b || isMore) return;
+        if (isGhost) return a.select(b.id);
+        if (b.children.length && b.level < 4) a.toggleOpen(b);
+        else if (b.kind === "class" && b.children.length) a.toggleOpen(b);
+        else if (b.kind !== "asset") a.drill(b);
+      }}
+      onMouseEnter={() => b && a.hover(b.id)}
+      onMouseLeave={() => a.hover(null)}
+      title={b ? `${humanTitle(b)} · ${KIND_LABEL[b.kind]} · ${b.loc} loc` : undefined}
     >
-      <Handle type="target" position={Position.Left} className="h" />
-      <div className="card-title" title={b.human_name ? "AI-written name" : "Name taken from the code"}>{humanTitle(b)}</div>
-      <div className="card-code-name">{chainTitle ?? b.code_name}{b.params.length > 0 && isDef ? `(${b.params.join(", ")})` : isDef && b.kind !== "class" && b.kind !== "type" ? "()" : ""}</div>
-      <Badges b={b} />
-      <div className="card-actions">
-        {b.kind !== "asset" && b.kind !== "project" && b.start_line != null && (
-          <button onClick={(e) => { e.stopPropagation(); a.toggleCode(b.id); }}>{showCode ? "Hide code" : "Expand"}</button>
-        )}
-        {canOpen && !isDef && <button onClick={(e) => { e.stopPropagation(); a.toggleOpen(b); }} title="Open one level deeper here">Open ▸</button>}
-        {(b.kind !== "asset") && <button onClick={(e) => { e.stopPropagation(); a.drill(b); }} title="Show this block's inner web">Drill in →</button>}
-        <button disabled title="Explain needs your AI key (next step of phase one)">Explain</button>
-        <button disabled title="Instruct needs your AI key and the gates (next step)">Instruct</button>
+      <Handle type="target" position={Position.Left} className="h" style={centred} isConnectable={false} />
+      <div className={`dot dot-${isMore ? "more" : isGhost ? "ghost" : b!.kind} ${n.kind === "frame" ? "open" : ""} ${b?.build_state === "partial" ? "partial" : ""}`} />
+      <div className={`lbl ${outer ? "lbl-outer" : "lbl-inner"}`} style={labelStyle}>
+        <span>{label}</span>
       </div>
-      {showCode && <InlineCode b={b} />}
-      <Handle type="source" position={Position.Right} className="h" />
+      <Handle type="source" position={Position.Right} className="h" style={centred} isConnectable={false} />
     </div>
   );
 });
 
-function InlineCode({ b }: { b: Block }) {
+/** The silk: rings between the threads, drawn as a web behind the dots. */
+export const RingsNode = memo(({ data }: NodeProps) => {
+  const rings = data.rings as number[];
+  const spokes = data.spokes as number[];
+  const R = rings[rings.length - 1] + 60;
+  const size = R * 2;
+  const pt = (r: number, a: number) => [R + Math.cos(a) * r, R + Math.sin(a) * r];
+  const paths: string[] = [];
+  for (const r of rings.slice(1)) {
+    // each ring sags slightly between spokes, like real silk
+    let d = "";
+    spokes.forEach((a, i) => {
+      const b = spokes[(i + 1) % spokes.length] + (i + 1 === spokes.length ? 2 * Math.PI : 0);
+      const [x0, y0] = pt(r, a);
+      const [x1, y1] = pt(r, b);
+      const [cx, cy] = pt(r * 0.94, (a + b) / 2);
+      d += `${i === 0 ? `M${x0},${y0}` : ""} Q${cx},${cy} ${x1},${y1}`;
+    });
+    paths.push(d);
+  }
+  return (
+    <svg width={size} height={size} className="silk" aria-hidden>
+      {spokes.map((a, i) => {
+        const [x, y] = pt(R - 40, a);
+        return <line key={`s${i}`} x1={R} y1={R} x2={x} y2={y} />;
+      })}
+      {paths.map((d, i) => <path key={i} d={d} />)}
+    </svg>
+  );
+});
+
+/** The block at the centre of the web. */
+export const HubNode = memo(({ data }: NodeProps) => {
   const a = useActions();
-  const [code, setCode] = useState<string | null>(null);
-  const [err, setErr] = useState<string | null>(null);
-  useEffect(() => {
-    let live = true;
-    a.loadCode(b).then((c) => live && setCode(c)).catch((e) => live && setErr(String(e)));
-    return () => { live = false; };
-  }, [b.id]); // eslint-disable-line react-hooks/exhaustive-deps
-  if (err) return <div className="inline-code error">{err}</div>;
-  if (code === null) return <div className="inline-code">Loading…</div>;
-  return <CodeLines code={code} start={b.start_line ?? 1} className="inline-code nowheel nodrag" />;
-}
+  const b = data.block as Block;
+  return (
+    <div className="hub" onClick={() => a.select(b.id)}>
+      <Handle type="source" position={Position.Right} className="h" style={centred} isConnectable={false} />
+      <div className="hub-dot" />
+      <div className="hub-label">{b.kind === "project" ? b.code_name : displayTitle([b])}</div>
+      <Handle type="target" position={Position.Left} className="h" style={centred} isConnectable={false} />
+    </div>
+  );
+});
+
+// ------------------------------------------------------------------ edges
+
+/** A connection bundled towards the parent both ends share. */
+export const BundledEdge = memo(({ id, sourceX, sourceY, targetX, targetY, data, style, markerEnd }: EdgeProps) => {
+  const c = data as { cx: number; cy: number };
+  const path = `M${sourceX},${sourceY} Q${c.cx},${c.cy} ${targetX},${targetY}`;
+  return <BaseEdge id={id} path={path} style={style} markerEnd={markerEnd} />;
+});
+
+/** The thread from a block to its parent. */
+export const ThreadEdge = memo(({ id, sourceX, sourceY, targetX, targetY, style }: EdgeProps) => (
+  <BaseEdge id={id} path={`M${sourceX},${sourceY} L${targetX},${targetY}`} style={style} />
+));
+
+// ------------------------------------------------------------------ inside levels
 
 export function CodeLines({ code, start, className }: { code: string; start: number; className?: string }) {
   const lines = code.split("\n");
@@ -122,41 +167,13 @@ export function CodeLines({ code, start, className }: { code: string; start: num
   );
 }
 
-export const MoreNode = memo(({ data }: NodeProps) => {
-  const a = useActions();
-  const n = data.node as DisplayNode;
-  return (
-    <div className="more" onClick={() => a.showAll(n.moreOf!)} title="Show every block in this frame">
-      <Handle type="target" position={Position.Left} className="h" />
-      + {n.moreCount} more
-      <div className="more-sub">less connected blocks</div>
-      <Handle type="source" position={Position.Right} className="h" />
-    </div>
-  );
-});
-
-export const GhostNode = memo(({ data }: NodeProps) => {
-  const a = useActions();
-  const n = data.node as DisplayNode;
-  const b = n.block!;
-  return (
-    <div className="ghost" onClick={() => a.select(b.id)} title="Outside the block you drilled into">
-      <Handle type="target" position={Position.Left} className="h" />
-      ↗ {b.code_name}
-      <div className="more-sub">outside</div>
-      <Handle type="source" position={Position.Right} className="h" />
-    </div>
-  );
-});
-
-export const InsideNode = memo(({ data }: NodeProps) => {
+export const InsideNode = memo(({ data, selected }: NodeProps) => {
   const a = useActions();
   const ib = data.inside as InsideBlock;
-  const sel = a.selected === ib.id;
   return (
-    <div className={`card inside inside-${ib.kind} ${sel ? "selected" : ""}`} onClick={() => a.select(ib.id)}
+    <div className={`card inside inside-${ib.kind} ${selected || data.sel ? "selected" : ""}`} onClick={() => a.select(ib.id)}
       onDoubleClick={() => ib.has_children && a.drillInside(ib)}>
-      <Handle type="target" position={Position.Top} className="h" />
+      <Handle type="target" position={Position.Top} className="h" isConnectable={false} />
       <div className="inside-head">
         <span className={`badge kind kind-${ib.kind}`}>{KIND_LABEL[ib.kind]}</span>
         <span className="inside-label" title={ib.named_by === "placeholder" ? "Placeholder name: AI names sections later" : undefined}>
@@ -166,9 +183,10 @@ export const InsideNode = memo(({ data }: NodeProps) => {
         {ib.has_children && <button className="link" onClick={(e) => { e.stopPropagation(); a.drillInside(ib); }}>Open →</button>}
       </div>
       <CodeLines code={ib.code} start={ib.start_line} className="inline-code small nowheel nodrag" />
-      <Handle type="source" position={Position.Bottom} className="h" />
+      <Handle type="source" position={Position.Bottom} className="h" isConnectable={false} />
     </div>
   );
 });
 
-export const nodeTypes = { frame: FrameNode, card: CardNode, more: MoreNode, ghost: GhostNode, inside: InsideNode };
+export const nodeTypes = { web: WebNode, rings: RingsNode, hub: HubNode, inside: InsideNode };
+export const edgeTypes = { bundled: BundledEdge, thread: ThreadEdge };

@@ -1,16 +1,17 @@
 import { useEffect, useState } from "react";
-import { CodeLines } from "./nodes";
+import { Badges, CodeLines } from "./nodes";
 import type { Block, Edge, InsideBlock } from "./types";
 import { humanTitle, type Index } from "./view";
 
 type Tab = "code" | "connections" | "details" | "explain";
 
 export function Panel(props: {
-  projectId: string;
   ix: Index;
   block: Block | null;
   inside: InsideBlock | null;
+  isOpen: boolean;
   loadCode: (b: Block) => Promise<string>;
+  onToggleOpen: (b: Block) => void;
   onSelect: (id: string) => void;
   onDrill: (b: Block) => void;
   onClose: () => void;
@@ -63,6 +64,18 @@ export function Panel(props: {
           <div className="muted small">{b.path || "(project root)"}{b.start_line ? ` · lines ${b.start_line}–${b.end_line}` : ""}</div>
         </div>
         <button className="icon" onClick={props.onClose}>×</button>
+      </div>
+      <div className="panel-meta">
+        <Badges b={b} />
+        <div className="panel-actions">
+          {b.children.length > 0 && b.level < 4 && (
+            <button onClick={() => props.onToggleOpen(b)}>{props.isOpen ? "Fold back" : "Open on the web"}</button>
+          )}
+          {b.kind === "class" && b.children.length > 0 && (
+            <button onClick={() => props.onToggleOpen(b)}>{props.isOpen ? "Fold methods" : "Show methods"}</button>
+          )}
+          {b.kind !== "asset" && b.kind !== "project" && <button onClick={() => props.onDrill(b)}>Drill in →</button>}
+        </div>
       </div>
       <div className="tabs">
         {(["code", "connections", "details", "explain"] as Tab[]).map((t) => (
