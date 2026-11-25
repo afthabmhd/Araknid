@@ -32,6 +32,13 @@ npm run dev          # http://localhost:5173, proxies /api to :8000
 
 For a single server, run `npm run build` in `web/`. The backend then serves `web/dist` at http://localhost:8000.
 
+**Static demo** (no server, one pre-mapped repo, shareable as a link):
+
+```bash
+cd araknid2/backend && python -m araknid.demo /path/to/repo ../web/public/demo.json "repo name"
+cd ../web && npm run build:demo     # output in web/dist-demo, serve it with any static host
+```
+
 Tests: `cd araknid2/backend && pytest`. Type check: `cd araknid2/web && npm run typecheck`.
 
 Settings (environment variables):

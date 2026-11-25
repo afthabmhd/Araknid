@@ -21,8 +21,7 @@
   background: var(--bg);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
     --bg: #0f131a;
     --surface: #171c25;
     --surface-2: #1f2531;
@@ -38,8 +37,26 @@
     --frame-file: #12161e;
     --frame-class: #1d1730;
     --code-bg: #10141b;
+    color-scheme: dark;
+  } }
+:root[data-theme="dark"] {
+    --bg: #0f131a;
+    --surface: #171c25;
+    --surface-2: #1f2531;
+    --border: #2c3442;
+    --text: #e5e9f0;
+    --muted: #8d97a8;
+    --accent: #8b87ff;
+    --accent-soft: #24264a;
+    --warn: #fbbf24;
+    --warn-soft: #3a2c10;
+    --frame-system: #161d2d;
+    --frame-module: #141922;
+    --frame-file: #12161e;
+    --frame-class: #1d1730;
+    --code-bg: #10141b;
+    color-scheme: dark;
   }
-}
 
 * { box-sizing: border-box; }
 html, body, #root { margin: 0; height: 100%; }
@@ -59,7 +76,8 @@ input[type="text"], input:not([type]) {
 .mono { font-family: "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace; font-size: 12px; }
 .center { display: grid; place-items: center; height: 100%; color: var(--muted); }
 .error { color: #dc2626; background: #fee2e2; padding: 8px 12px; border-radius: 6px; margin-top: 12px; font-size: 13px; }
-@media (prefers-color-scheme: dark) { .error { background: #3b1414; color: #fca5a5; } }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .error { background: #3b1414; color: #fca5a5; } }
+:root[data-theme="dark"] .error { background: #3b1414; color: #fca5a5; }
 .note { background: var(--accent-soft); border-radius: 6px; padding: 10px 12px; font-size: 12px; line-height: 1.5; }
 .icon { border: none; background: transparent; font-size: 14px; padding: 0 4px; color: var(--muted); }
 .link { border: none; background: transparent; color: var(--accent); padding: 0 4px; }
@@ -158,15 +176,15 @@ input[type="text"], input:not([type]) {
 .badge.kind-function, .badge.kind-method { background: #e0edff; color: #1d4ed8; border-color: #bfd6ff; }
 .badge.kind-file { background: #e6f6ef; color: #047857; border-color: #b9e6d1; }
 .badge.kind-module, .badge.kind-system { background: var(--accent-soft); color: var(--accent); }
-@media (prefers-color-scheme: dark) {
-  .badge.kind-class { background: #2b1f4a; color: #c4b5fd; border-color: #3f2f6b; }
-  .badge.kind-component { background: #3a2a10; color: #fcd34d; border-color: #5a4218; }
-  .badge.kind-function, .badge.kind-method { background: #152443; color: #93c5fd; border-color: #203763; }
-  .badge.kind-file { background: #0f2e24; color: #6ee7b7; border-color: #18493a; }
-}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .badge.kind-class { background: #2b1f4a; color: #c4b5fd; border-color: #3f2f6b; } :root:not([data-theme="light"]) .badge.kind-component { background: #3a2a10; color: #fcd34d; border-color: #5a4218; } :root:not([data-theme="light"]) .badge.kind-function, :root:not([data-theme="light"]) .badge.kind-method { background: #152443; color: #93c5fd; border-color: #203763; } :root:not([data-theme="light"]) .badge.kind-file { background: #0f2e24; color: #6ee7b7; border-color: #18493a; } }
+:root[data-theme="dark"] .badge.kind-class { background: #2b1f4a; color: #c4b5fd; border-color: #3f2f6b; }
+:root[data-theme="dark"] .badge.kind-component { background: #3a2a10; color: #fcd34d; border-color: #5a4218; }
+:root[data-theme="dark"] .badge.kind-function, :root[data-theme="dark"] .badge.kind-method { background: #152443; color: #93c5fd; border-color: #203763; }
+:root[data-theme="dark"] .badge.kind-file { background: #0f2e24; color: #6ee7b7; border-color: #18493a; }
 .badge.role { background: #dcfce7; color: #15803d; border-color: #bbf7d0; }
 .badge.warn { background: var(--warn-soft); color: var(--warn); border-color: transparent; }
-@media (prefers-color-scheme: dark) { .badge.role { background: #0f2e1a; color: #86efac; border-color: #1c4a2c; } }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .badge.role { background: #0f2e1a; color: #86efac; border-color: #1c4a2c; } }
+:root[data-theme="dark"] .badge.role { background: #0f2e1a; color: #86efac; border-color: #1c4a2c; }
 
 .card {
   width: 100%; height: 100%; background: var(--surface); border: 1px solid var(--border); border-radius: 10px;

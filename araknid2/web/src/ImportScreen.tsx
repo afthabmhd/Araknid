@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { api } from "./api";
+import { api, STATIC } from "./api";
 import type { Project } from "./types";
 
 // Same list as the backend walker, so uploads skip generated and vendored code.
@@ -61,6 +61,12 @@ export function ImportScreen({ onOpen }: { onOpen: (p: Project) => void }) {
       <div className="import-inner">
         <h1>Araknid <span>2.0</span></h1>
         <p className="lead">Import a JavaScript, TypeScript or Python repo and read it as a web of blocks.</p>
+        {STATIC && (
+          <p className="note">
+            This is a hosted demo with one repo already mapped. Open it below. Importing your own repo needs Araknid
+            running on your machine (see the README on the PR branch).
+          </p>
+        )}
 
         <section className="import-card">
           <h3>GitHub repo</h3>
