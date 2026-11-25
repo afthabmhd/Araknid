@@ -21,6 +21,15 @@ This first slice is the **code web**: it covers the Phase 0 graph engine spike a
      summed line per pair of frames. Cards with no lines are packed in a small grid, and unrelated frames sit side by
      side.
   4. **Nothing is cut off.** A connection to code outside the current block is counted on an "outside" stub.
+  **One block / All levels.** By default the canvas shows what's in the block you're in, and the › on a card opens
+  just that block in place (one at a time). "All levels" brings back the slider, which opens every block to a level.
+  **Plain words.** Every block gets one line saying what it does: the author's own docstring or comment when there is
+  one, otherwise a sentence built from the code facts (`simplify.py`). Lines are labelled "uses", "calls API",
+  "loads", "shows", "creates", "builds on".
+  **Web links** (`weblinks.py`). Front-end `fetch()`/axios/generated-client calls are linked to the API route that
+  serves them (decorator routes with router prefixes, and file-based `api/` routes), and HTML pages to the scripts and
+  styles they load. Code inside `(() => { ... })()` and DOMContentLoaded wrappers counts as top level, and folders
+  that are build copies of other files (like a `public/` filled by a build step) are hidden.
   **Trace** is the main way to explore: click any card to see it in the middle, what uses it on the left and what it uses on the right,
   grouped by file. Functions open into the inside levels 5 to 7 (sections, statements, expressions).
 
@@ -69,6 +78,8 @@ araknid2/
     parsers.py   tree-sitter parser: definitions, imports, call sites, stubs, routes
     resolver.py  links imports and calls across files ("sure" or "maybe")
     engine.py    builds levels 0 to 4, edges, importance and hub exclusion, parse health
+    weblinks.py  front end -> API route links, page -> script links
+    simplify.py  one plain-language line per block (author's comment, else code facts)
     inside.py    levels 5 to 7 on demand: sections, statements, expressions
     store.py     project store on disk (a stand-in for Postgres)
     api.py       FastAPI endpoints
@@ -99,6 +110,9 @@ araknid2/
 - **[Guess]** At most 24 cards per frame and 16 frames before "+ N more". Over 160 lines on a level, lines are summed per frame.
 - **[Guess]** "+ N more" folds after 30 children, sections start at 40 lines or more than 3 control structures, and a
   file counts as `few_blocks` when it has over 300 lines and no definitions.
+- **[Guess]** A folder is a build copy when at least 3 of its files, and 80% of them, match files elsewhere byte for byte.
+- A request through a project's own helper (`api('/api/x')`) links only when a route matches the URL. A router mounted under
+  an unknown prefix links by the end of the path and is marked "maybe".
 - **[Guess]** Level 0 "project" is an extra root above the System blocks, so the tree has a single root.
 - Block ids come from the path. Keeping ids across renames and moves by `shape_hash` comes with the incremental updater.
 - The calls resolver is our own import resolution. It doesn't use Pyright or the TypeScript server yet. A call on an

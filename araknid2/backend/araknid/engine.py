@@ -16,7 +16,7 @@ import time
 from pathlib import Path, PurePosixPath
 from typing import Optional
 
-from . import parsers
+from . import parsers, simplify, weblinks
 from .model import (
     LEVEL_DEFINITION, LEVEL_FILE, LEVEL_MODULE, LEVEL_PROJECT, LEVEL_SYSTEM,
     Block, Edge, Graph, block_id, text_hash,
@@ -135,6 +135,8 @@ def build_graph(root: Path, project_id: str, name: str) -> Graph:
     def_nodes: dict[str, parsers.Definition] = {}
     def_file: dict[str, str] = {}
     def_class: dict[str, Optional[str]] = {}  # method block id -> class block id
+    pages: dict[str, str] = {}  # html file -> its text
+    sources: dict[str, bytes] = {}  # code file -> bytes, for summaries
     total_lines = 0
 
     for f in files:
@@ -150,15 +152,19 @@ def build_graph(root: Path, project_id: str, name: str) -> Graph:
         lines = src.count(b"\n") + (0 if src.endswith(b"\n") else 1) if src else 0
         total_lines += lines if f.language else 0
         fid = block_id(f.rel)
+        is_page = f.rel.lower().endswith((".html", ".htm"))
         fb = Block(
             id=fid, parent_id=parent, path=f.rel, level=LEVEL_FILE,
-            kind="file" if f.language else "asset", code_name=PurePosixPath(f.rel).name,
-            language=f.language, file=f.rel, start_line=1, end_line=max(lines, 1),
+            kind="file" if f.language or is_page else "asset", code_name=PurePosixPath(f.rel).name,
+            language=f.language or ("html" if is_page else None), file=f.rel, start_line=1, end_line=max(lines, 1),
             start_byte=0, end_byte=len(src), loc=lines, content_hash=text_hash(src),
             is_test=is_test_path(f.rel),
         )
         g.add(fb)
         file_ids[f.rel] = fid
+        if is_page:
+            fb.tags.append("page")
+            pages[f.rel] = src.decode("utf-8", errors="replace")
         if not f.language:
             continue
         try:
@@ -167,6 +173,7 @@ def build_graph(root: Path, project_id: str, name: str) -> Graph:
             fb.health = "parse_failed"
             continue
         parses[f.rel] = fp
+        sources[f.rel] = src
         if fp.is_entry:
             fb.tags.append("entry")
         if PurePosixPath(f.rel).stem in ("main", "index", "app", "server", "cli", "__main__", "manage", "wsgi", "asgi"):
@@ -210,6 +217,7 @@ def build_graph(root: Path, project_id: str, name: str) -> Graph:
     # ---------------------------------------------------------- resolve
     resolver = Resolver(root, [f.rel for f in files if f.language], systems, parses, defs_by_file)
     edges: dict[tuple[str, str, str], Edge] = {}
+    requests: list[tuple[str, str, Optional[str]]] = []  # (from block, url, method)
 
     def add_edge(src_id: str, dst_id: str, kind: str, certainty: str, origin: str) -> None:
         if src_id == dst_id:
@@ -231,6 +239,9 @@ def build_graph(root: Path, project_id: str, name: str) -> Graph:
             if target and target in file_ids:
                 add_edge(fid, file_ids[target], "imports", imp.certainty, "extracted")
         for call in fp.top_calls:
+            if call.kind == "requests":
+                requests.append((fid, call.name, call.receiver))
+                continue
             dst, cert = resolver.resolve_call(rel, call, bindings, None)
             if dst:
                 add_edge(fid, dst, call.kind, cert, "inferred")
@@ -239,6 +250,9 @@ def build_graph(root: Path, project_id: str, name: str) -> Graph:
         rel = def_file[bid]
         bindings = resolver.bindings_for(rel)
         for call in d.calls:
+            if call.kind == "requests":
+                requests.append((bid, call.name, call.receiver))
+                continue
             dst, cert = resolver.resolve_call(rel, call, bindings, def_class.get(bid) or (bid if d.kind == "class" else None))
             if dst:
                 add_edge(bid, dst, call.kind, cert, "inferred")
@@ -247,12 +261,33 @@ def build_graph(root: Path, project_id: str, name: str) -> Graph:
             if dst:
                 add_edge(bid, dst, "inherits", cert, "inferred")
 
+    # ---------------------------------------------------------- web links
+    # front end -> API route, and page -> script/style (no import shows these)
+    decorated = [(bid, d.route, d.route_method) for bid, d in def_nodes.items() if d.route is not None]
+    routes = weblinks.build_routes(list(parses), systems, lambda r: _system_for(r, systems), file_ids, decorated)
+    for r in routes:
+        rb = g.blocks[r.block_id]
+        if "route" not in rb.tags:
+            rb.tags.append("route")
+        rb.route = (f"{r.method} " if r.method else "") + r.path
+    for src_id, url, method in requests:
+        indirect = method is not None and method.startswith("?")  # through the project's own helper
+        if indirect:
+            method = method[1:] or None
+        r, cert = weblinks.match_request(url, method, routes)
+        if r is not None:
+            add_edge(src_id, r.block_id, "requests", "maybe" if indirect and cert == "maybe" else cert, "inferred")
+    known = set(file_ids)
+    for rel, html in pages.items():
+        for target, kind in weblinks.page_links(rel, html, _system_for(rel, systems), known):
+            add_edge(file_ids[rel], file_ids[target], kind, "sure", "extracted")
+
     g.edges = list(edges.values())
 
     # ---------------------------------------------------------- importance
     indeg: dict[str, int] = {}
     for e in g.edges:
-        if e.kind in ("calls", "instantiates", "renders", "inherits"):
+        if e.kind in ("calls", "instantiates", "renders", "inherits", "requests", "loads"):
             indeg[e.target] = indeg.get(e.target, 0) + e.count
         elif e.kind == "imports":
             indeg[e.target] = indeg.get(e.target, 0) + 1
@@ -280,6 +315,8 @@ def build_graph(root: Path, project_id: str, name: str) -> Graph:
     for b in order:
         if b.kind in ("module",) and b.children and all(g.blocks[c].is_test for c in b.children):
             b.is_test = True
+
+    simplify.summarise(g, sources)
 
     counts: dict[str, int] = {}
     for b in g.blocks.values():

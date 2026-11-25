@@ -10,7 +10,7 @@ import { buildLevelView, buildTrace, type Link } from "./levelview";
 import { Actions, edgeTypes, nodeTypes, type CanvasActions } from "./nodes";
 import { Panel } from "./Panel";
 import type { Block, EdgeKind, GraphData, InsideBlock, InsideResult } from "./types";
-import { defaultFilters, displayTitle, Index, search, type Filters } from "./view";
+import { defaultFilters, displayTitle, EDGE_VERB, Index, search, visibleChildren, type Filters } from "./view";
 
 const LEVELS = [
   { n: 1, name: "System" },
@@ -28,6 +28,8 @@ export const EDGE_COLORS: Record<EdgeKind, string> = {
   instantiates: "var(--e-instantiates)",
   inherits: "var(--e-inherits)",
   renders: "var(--e-renders)",
+  requests: "var(--e-requests)",
+  loads: "var(--e-loads)",
   next: "var(--e-imports)",
 };
 
@@ -53,6 +55,16 @@ function Inner({ graph, onBack, onRemap }: { graph: GraphData; onBack: () => voi
   const ix = useMemo(() => new Index(graph), [graph]);
   const [level, setLevel] = useState(2);
   const [showAll, setShowAll] = useState<Record<string, boolean>>({});
+  // "one": open one block at a time, in place (default). "all": the slider opens every block to a level.
+  const [openMode, setOpenModeState] = useState<"one" | "all">(() => {
+    try { return localStorage.getItem("araknid.openMode") === "all" ? "all" : "one"; } catch { return "one"; }
+  });
+  const setOpenMode = (m: "one" | "all") => {
+    setOpenModeState(m);
+    setExpanded(null);
+    try { localStorage.setItem("araknid.openMode", m); } catch { /* private mode */ }
+  };
+  const [expanded, setExpanded] = useState<string | null>(null);
   const [filters, setFilters] = useState<Filters>(defaultFilters);
   const [crumbs, setCrumbs] = useState<Crumb[]>([{ kind: "block", id: graph.root_id }]);
   const [selected, setSelected] = useState<string | null>(null);
@@ -71,8 +83,8 @@ function Inner({ graph, onBack, onRemap }: { graph: GraphData; onBack: () => voi
   const mode: "level" | "inside" | "trace" = top.kind === "block" ? "level" : top.kind;
 
   const view = useMemo(
-    () => (mode === "level" ? buildLevelView(ix, rootId, level, filters, showAll) : null),
-    [ix, rootId, level, filters, showAll, mode],
+    () => (mode === "level" ? buildLevelView(ix, rootId, level, filters, showAll, { one: openMode === "one", expanded }) : null),
+    [ix, rootId, level, filters, showAll, mode, openMode, expanded],
   );
   const trace = useMemo(() => (top.kind === "trace" ? buildTrace(ix, top.id, filters) : null), [ix, top, filters]);
 
@@ -89,6 +101,7 @@ function Inner({ graph, onBack, onRemap }: { graph: GraphData; onBack: () => voi
       setCrumbs((c) => [...c.filter((x) => x.kind !== "trace"), { kind: "block", id: b.id }]);
     }
     setShowAll({});
+    setExpanded(null);
     setSelected(null);
     setHovered(null);
   }, []);
@@ -115,11 +128,16 @@ function Inner({ graph, onBack, onRemap }: { graph: GraphData; onBack: () => voi
     select: (id) => setSelected(id),
     trace: (b) => (b.kind === "project" ? setSelected(b.id) : traceBlock(b)),
     hover: (id) => setHovered(id),
-    toggleOpen: (b) => drill(b),
+    toggleOpen: (b) => {
+      if (openMode === "one" && visibleChildren(ix, b, filters).length > 0) {
+        setExpanded((cur) => (cur === b.id ? null : b.id));
+      } else drill(b);
+    },
+    expanded: openMode === "one" ? expanded : null,
     drill,
     showAll: (owner) => setShowAll((s) => ({ ...s, [owner]: true })),
     drillInside,
-  }), [drill, drillInside, traceBlock]);
+  }), [drill, drillInside, traceBlock, openMode, expanded, ix, filters]);
 
   // ------------------------------------------------------------- level view
   useEffect(() => {
@@ -193,7 +211,7 @@ function Inner({ graph, onBack, onRemap }: { graph: GraphData; onBack: () => voi
             className: `sum sum-${kind}`,
             style: { stroke: EDGE_COLORS[kind], strokeWidth: 1.4 },
             markerEnd: { type: MarkerType.ArrowClosed, color: EDGE_COLORS[kind], width: 12, height: 12 },
-            label: it.count > 1 ? `${it.kinds.join(", ")} ×${it.count}` : it.kinds.join(", "),
+            label: `${it.kinds.map((k) => EDGE_VERB[k]).join(", ")}${it.count > 1 ? ` ×${it.count}` : ""}`,
             labelBgPadding: [4, 2], labelBgBorderRadius: 4,
             selectable: false, focusable: false,
           });
@@ -264,7 +282,9 @@ function Inner({ graph, onBack, onRemap }: { graph: GraphData; onBack: () => voi
       // every card line is already on screen: light the ones that touch the focus
       const members = new Set<string>([rep, ...(isFrame ? view.groups.find((g) => g.id === rep)!.cards : [])]);
       const touches = (e: RFEdge) => members.has(e.source) || members.has(e.target);
-      shown = base.edges.map((e) => ({ ...e, className: `${e.className} ${touches(e) ? "hot" : "faded"}`, zIndex: touches(e) ? 10 : 2 }));
+      shown = base.edges.map((e) => (touches(e)
+        ? { ...e, className: `${e.className} hot`, zIndex: 10, label: (e.data?.verb as string) ?? e.label }
+        : { ...e, className: `${e.className} faded`, zIndex: 2 }));
       for (const e of base.edges) if (touches(e)) { lit.add(e.source); lit.add(e.target); }
     } else if (isFrame || rep.startsWith("out:")) {
       shown = base.edges.map((e) => (e.source === rep || e.target === rep ? { ...e, className: `${e.className} hot` } : { ...e, className: `${e.className} faded` }));
@@ -272,7 +292,7 @@ function Inner({ graph, onBack, onRemap }: { graph: GraphData; onBack: () => voi
     } else {
       const mine = base.cardLinks.filter((l) => l.source === rep || l.target === rep);
       for (const l of mine) { lit.add(l.source); lit.add(l.target); }
-      extra = mine.map((l) => ({ ...summedEdge(l, "card", base.routes?.get(l.id)), className: `${summedEdge(l, "card").className} hot`, zIndex: 10 }));
+      extra = mine.map((l) => ({ ...summedEdge(l, "card", base.routes?.get(l.id)), className: `${summedEdge(l, "card").className} hot`, zIndex: 10, label: plainLabel(l) }));
       shown = base.edges.map((e) => ({ ...e, className: `${e.className} faded` }));
     }
     const g = view.cards.get(rep)?.group;
@@ -290,11 +310,14 @@ function Inner({ graph, onBack, onRemap }: { graph: GraphData; onBack: () => voi
   // ------------------------------------------------------------- fitting the view
   useEffect(() => {
     fitPending.current = true;
-  }, [crumbs, level]);
+  }, [crumbs, level, expanded, openMode]);
   useEffect(() => {
     if (!fitPending.current || base.nodes.length === 0) return;
-    fitPending.current = false;
-    const t = setTimeout(() => rf.fitView({ padding: 0.1, duration: 300, maxZoom: 1.15 }), 80);
+    // only clear the flag once the fit has run, so a quick second update can't swallow it
+    const t = setTimeout(() => {
+      fitPending.current = false;
+      rf.fitView({ padding: 0.1, duration: 300, maxZoom: 1.15 });
+    }, 80);
     return () => clearTimeout(t);
   }, [base, rf]);
 
@@ -332,7 +355,13 @@ function Inner({ graph, onBack, onRemap }: { graph: GraphData; onBack: () => voi
         <header className="topbar">
           <button className="ghost-btn" onClick={onBack} title="All projects">◂ Projects</button>
           <div className="brand">Araknid <span>2.0</span></div>
-          <div className="slider" role="group" aria-label="Detail level">
+          <div className="seg" role="group" aria-label="How blocks open">
+            <button className={openMode === "one" ? "active" : ""} onClick={() => setOpenMode("one")}
+              title="See what's in the current block. Open one block at a time to look inside it.">One block</button>
+            <button className={openMode === "all" ? "active" : ""} onClick={() => setOpenMode("all")}
+              title="Open every block down to the level you pick">All levels</button>
+          </div>
+          {openMode === "all" && <div className="slider" role="group" aria-label="Detail level">
             <span className="slider-label">Detail</span>
             {LEVELS.map((l) => {
               const inside = l.n >= 5;
@@ -349,7 +378,7 @@ function Inner({ graph, onBack, onRemap }: { graph: GraphData; onBack: () => voi
                 </button>
               );
             })}
-          </div>
+          </div>}
           <div className="search">
             <input placeholder="Search blocks by name or file" value={query} onChange={(e) => setQuery(e.target.value)} />
             {results.length > 0 && (
@@ -372,7 +401,7 @@ function Inner({ graph, onBack, onRemap }: { graph: GraphData; onBack: () => voi
               {i > 0 && <span className="sep">›</span>}
               <button
                 className={i === crumbs.length - 1 ? "current" : ""}
-                onClick={() => { setCrumbs(crumbs.slice(0, i + 1)); setShowAll({}); setSelected(null); setHovered(null); }}
+                onClick={() => { setCrumbs(crumbs.slice(0, i + 1)); setShowAll({}); setExpanded(null); setSelected(null); setHovered(null); }}
               >
                 {crumbTitle(c, i)}
               </button>
@@ -392,8 +421,8 @@ function Inner({ graph, onBack, onRemap }: { graph: GraphData; onBack: () => voi
             <Check id="f-assets" label="Other files (config, docs)" v={filters.assets} on={(v) => setFilters({ ...filters, assets: v })} />
             <Check id="f-types" label="Type declarations" v={filters.types} on={(v) => setFilters({ ...filters, types: v })} />
             <h4>Connections</h4>
-            {(["calls", "imports", "renders", "instantiates", "inherits"] as EdgeKind[]).map((k) => (
-              <Check key={k} id={`f-${k}`} label={k} color={EDGE_COLORS[k]} v={filters.edgeKinds[k]}
+            {(["calls", "requests", "loads", "imports", "renders", "instantiates", "inherits"] as EdgeKind[]).map((k) => (
+              <Check key={k} id={`f-${k}`} label={EDGE_VERB[k]} color={EDGE_COLORS[k]} v={filters.edgeKinds[k]}
                 on={(v) => setFilters({ ...filters, edgeKinds: { ...filters.edgeKinds, [k]: v } })} />
             ))}
             <Check id="f-maybe" label="Maybe links (guessed by name)" v={filters.maybe} on={(v) => setFilters({ ...filters, maybe: v })} />
@@ -449,6 +478,12 @@ function Inner({ graph, onBack, onRemap }: { graph: GraphData; onBack: () => voi
   );
 }
 
+/** "uses ×3", "calls API": the line's main kind in plain words. */
+function plainLabel(l: Link): string {
+  const kind = mainKind(l);
+  return `${EDGE_VERB[kind]}${l.count > 1 ? ` ×${l.count}` : ""}`;
+}
+
 const DENSE_LINKS = 160; // [Guess] above this many lines, a level shows summed frame lines at rest
 
 function summedEdge(l: Link, scope: "group" | "card", points?: Point[]): RFEdge {
@@ -467,7 +502,7 @@ function summedEdge(l: Link, scope: "group" | "card", points?: Point[]): RFEdge 
     labelBgBorderRadius: 8,
     selectable: false,
     focusable: false,
-    data: { kinds: l.kinds, points },
+    data: { kinds: l.kinds, points, verb: plainLabel(l) },
     ...(points ? { type: "routed", zIndex: 2 } : {}),
   };
 }

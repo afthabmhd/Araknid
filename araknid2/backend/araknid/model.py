@@ -44,7 +44,7 @@ BlockKind = Literal[
     "expression",
 ]
 
-EdgeKind = Literal["imports", "calls", "inherits", "instantiates", "renders", "next"]
+EdgeKind = Literal["imports", "calls", "inherits", "instantiates", "renders", "requests", "loads", "next"]
 Certainty = Literal["sure", "maybe"]
 Origin = Literal["extracted", "inferred", "user"]
 
@@ -74,6 +74,11 @@ class Block:
     # Plain-language title. AI-written later; None until then. The client
     # shows a title derived from code_name meanwhile and marks it as such.
     human_name: Optional[str] = None
+    # One plain-language line about what the block does. From the author's own
+    # docstring or comment when there is one, else from code facts (rules).
+    summary: Optional[str] = None
+    summary_by: Optional[str] = None  # "author" | "rules" | "ai"
+    route: Optional[str] = None  # "POST /api/register" for API routes
     language: Optional[str] = None
     file: Optional[str] = None
     start_line: Optional[int] = None

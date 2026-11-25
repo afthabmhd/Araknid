@@ -11,7 +11,7 @@ import ELK from "elkjs/lib/elk.bundled.js";
 import type { LevelView, Trace } from "./levelview";
 
 export const CARD_W = 210;
-export const CARD_H = 58;
+export const CARD_H = 62;
 const GAP = 10;
 const FRAME_PAD = 14;
 const FRAME_HEAD = 34;

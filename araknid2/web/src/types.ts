@@ -5,7 +5,7 @@ export type BlockKind =
   | "class" | "function" | "method" | "component" | "type"
   | "section" | "statement" | "expression";
 
-export type EdgeKind = "imports" | "calls" | "inherits" | "instantiates" | "renders" | "next";
+export type EdgeKind = "imports" | "calls" | "inherits" | "instantiates" | "renders" | "requests" | "loads" | "next";
 
 export interface Block {
   id: string;
@@ -15,6 +15,9 @@ export interface Block {
   kind: BlockKind;
   code_name: string;
   human_name: string | null;
+  summary?: string | null;
+  summary_by?: "author" | "rules" | "ai" | null;
+  route?: string | null;
   language: string | null;
   file: string | null;
   start_line: number | null;

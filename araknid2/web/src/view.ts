@@ -17,7 +17,7 @@ export const defaultFilters: Filters = {
   tests: false,
   assets: false,
   types: false,
-  edgeKinds: { imports: true, calls: true, inherits: true, instantiates: true, renders: true, next: true },
+  edgeKinds: { imports: true, calls: true, inherits: true, instantiates: true, renders: true, requests: true, loads: true, next: true },
   maybe: true,
 };
 
@@ -85,8 +85,21 @@ export function displayTitle(chain: Block[]): string {
     .join(" › ");
 }
 
+/** Connections in plain words. */
+export const EDGE_VERB: Record<EdgeKind, string> = {
+  calls: "uses",
+  imports: "imports",
+  inherits: "builds on",
+  instantiates: "creates",
+  renders: "shows",
+  requests: "calls API",
+  loads: "loads",
+  next: "then",
+};
+
 export function humanTitle(b: Block): string {
   if (b.human_name) return b.human_name;
+  if (b.route && b.kind === "file") return b.route;
   if (["file", "asset", "module", "system", "project"].includes(b.kind)) return b.code_name;
   const s = b.code_name.replace(/[_-]+/g, " ").replace(/([a-z0-9])([A-Z])/g, "$1 $2").trim();
   return s ? s[0].toUpperCase() + s.slice(1) : b.code_name;

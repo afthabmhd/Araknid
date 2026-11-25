@@ -7,6 +7,7 @@ same code works across tree-sitter binding versions.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Optional
@@ -62,6 +63,9 @@ class Definition:
     tags: list[str] = field(default_factory=list)
     is_stub: bool = False
     shape_hash: str = ""
+    route: Optional[str] = None  # URL path from a route decorator, e.g. "/users/{id}"
+    route_method: Optional[str] = None
+    route_obj: Optional[str] = None  # the router variable, for its prefix
 
 
 @dataclass
@@ -111,6 +115,13 @@ PY_COMPOUND = {
     "with_statement", "match_statement",
 }
 ROUTE_DECORATOR_HINTS = (".get", ".post", ".put", ".patch", ".delete", ".route", ".websocket", ".api_route")
+ROUTE_PATH_RE = re.compile(r"\.(get|post|put|patch|delete|route|api_route|websocket)\(\s*[rbf]?['\"]([^'\"]*)['\"]")
+
+# HTTP clients: a call to one of these with a URL string is a request to an API route
+HTTP_VERBS = {"get", "post", "put", "patch", "delete", "head", "options", "request"}
+JS_HTTP_OBJECTS = {"axios", "http", "api", "client", "ky", "$http", "superagent"}
+PY_HTTP_OBJECTS = {"requests", "httpx", "client", "session", "aiohttp"}
+URL_HINT_RE = re.compile(r"^(https?://[^/]+)?/[\w\-./{}:$*\[\]]*")
 
 
 def _py_params(params: Optional[Node]) -> list[str]:
@@ -167,6 +178,13 @@ def _py_collect_calls(node: Node, out: list[CallSite]) -> None:
                     attr = fn.child_by_field_name("attribute")
                     recv = _text(obj) if obj is not None and obj.type == "identifier" else None
                     name = _text(attr)
+                    if recv in PY_HTTP_OBJECTS and name.lower() in HTTP_VERBS:
+                        args = n.child_by_field_name("arguments")
+                        first = args.named_children[0] if args is not None and args.named_children else None
+                        if first is not None and first.type == "string":
+                            frag = "".join(_text(c) if c.type == "string_content" else "{}" for c in first.named_children if c.type in ("string_content", "interpolation"))
+                            if URL_HINT_RE.match(frag) and frag.strip("/"):
+                                out.append(CallSite(name=frag, receiver=name.upper(), kind="requests"))
                     kind = "instantiates" if name[:1].isupper() else "calls"
                     out.append(CallSite(name=name, receiver=recv or "?", kind=kind))
         stack.extend(n.children)
@@ -212,6 +230,12 @@ def _py_defs(node: Node, in_class: bool, out: list[Definition]) -> None:
                 if any(h in dec for h in ROUTE_DECORATOR_HINTS) or dec.startswith("@app.") or dec.startswith("@router."):
                     if "route" not in d.tags:
                         d.tags.append("route")
+                    m = ROUTE_PATH_RE.search(dec)
+                    if m and d.route is None:
+                        obj = re.match(r"@(\w+)\.", dec)
+                        d.route_obj = obj.group(1) if obj else None
+                        d.route = m.group(2)
+                        d.route_method = None if m.group(1) in ("route", "api_route", "websocket") else m.group(1).upper()
                 if "property" in dec:
                     d.tags.append("property")
             d.shape_hash = shape_of(target)
@@ -234,11 +258,26 @@ def _py_collect_calls_top(class_body: Node, out: list[CallSite]) -> None:
         _py_collect_calls(c, out)
 
 
+ROUTER_PREFIX_RE = re.compile(r"^(\w+)\s*=\s*(?:\w+\.)?(?:APIRouter|Blueprint|Router)\((.*?)\)\s*$", re.M | re.S)
+
+
 def parse_python(src: bytes) -> FileParse:
     tree = parse_bytes("python", src)
     root = tree.root_node
     fp = FileParse(language="python", has_error=root.has_error, line_count=src.count(b"\n") + 1)
     _py_defs(root, False, fp.definitions)
+    # router prefixes: router = APIRouter(prefix="/users"), bp = Blueprint("x", __name__, url_prefix="/x")
+    prefixes: dict[str, str] = {}
+    for n in root.children:
+        if n.type == "expression_statement":
+            m = ROUTER_PREFIX_RE.match(_text(n))
+            if m:
+                p = re.search(r"(?:url_)?prefix\s*=\s*['\"]([^'\"]*)['\"]", m.group(2))
+                prefixes[m.group(1)] = p.group(1) if p else ""
+    if prefixes:
+        for d in fp.definitions:
+            if d.route is not None and d.route_obj in prefixes:
+                d.route = (prefixes[d.route_obj].rstrip("/") + "/" + d.route.lstrip("/")) if d.route.strip("/") else (prefixes[d.route_obj] or "/")
     for n in root.children:
         if n.type == "import_statement":
             for c in n.named_children:
@@ -352,6 +391,9 @@ def _js_collect_calls(node: Node, out: list[CallSite]) -> None:
                 continue
         if n.type == "call_expression":
             fn = n.child_by_field_name("function")
+            req = _js_request(n, fn)
+            if req is not None:
+                out.append(req)
             if fn is not None:
                 if fn.type == "identifier":
                     out.append(CallSite(name=_text(fn)))
@@ -385,6 +427,83 @@ def _js_collect_calls(node: Node, out: list[CallSite]) -> None:
                     else:
                         out.append(CallSite(name=t, kind="renders"))
         stack.extend(n.children)
+
+
+def _js_url(node: Optional[Node]) -> Optional[str]:
+    """A URL path from a string or template literal; ${...} parts become {}."""
+    if node is None:
+        return None
+    if node.type == "string":
+        v = _string_value(node)
+    elif node.type == "template_string":
+        v = ""
+        for c in node.children:
+            if c.type == "string_fragment":
+                v += _text(c)
+            elif c.type == "template_substitution":
+                v += "{}"
+    else:
+        return None
+    if v is None or not URL_HINT_RE.match(v) or not v.strip("/"):
+        return None
+    return v
+
+
+def _js_request(call: Node, fn: Optional[Node]) -> Optional[CallSite]:
+    """fetch('/api/x', {method: 'POST'}), axios.post('/api/x'), ... as a "requests" call site."""
+    if fn is None:
+        return None
+    args = call.child_by_field_name("arguments")
+    if args is None or not args.named_children:
+        return None
+    is_fetch = (fn.type == "identifier" and _text(fn) == "fetch") or (
+        fn.type == "member_expression" and _text(fn.child_by_field_name("property")) == "fetch")
+    method: Optional[str] = None
+    if is_fetch:
+        method = "GET"
+        if len(args.named_children) > 1 and args.named_children[1].type == "object":
+            for pair in args.named_children[1].named_children:
+                if pair.type == "pair" and _text(pair.child_by_field_name("key")).strip("'\"") == "method":
+                    method = (_string_value(pair.child_by_field_name("value")) or "GET").upper()
+    elif (fn.type == "member_expression" and _text(fn.child_by_field_name("property")).lower() in HTTP_VERBS
+          and fn.child_by_field_name("object") is not None
+          and _text(fn.child_by_field_name("object")).split(".")[-1] in JS_HTTP_OBJECTS
+          and _js_url(args.named_children[0]) is not None):
+        prop = _text(fn.child_by_field_name("property")).lower()
+        method = prop.upper() if prop != "request" else None
+    else:
+        # generated clients: client.post({ url: '/api/v1/users/', ... }) or __request(OpenAPI, { method, url })
+        for obj in args.named_children:
+            if obj.type != "object":
+                continue
+            found_url, found_method = None, None
+            for pair in obj.named_children:
+                if pair.type != "pair":
+                    continue
+                key = _text(pair.child_by_field_name("key")).strip("'\"")
+                if key == "url":
+                    found_url = _js_url(pair.child_by_field_name("value"))
+                elif key == "method":
+                    found_method = (_string_value(pair.child_by_field_name("value")) or "").upper() or None
+            if found_url:
+                prop = _text(fn.child_by_field_name("property")).lower() if fn.type == "member_expression" else ""
+                verb = prop.upper() if prop in HTTP_VERBS and prop != "request" else found_method
+                return CallSite(name=found_url, receiver=verb, kind="requests")
+        # a project's own helper, like api('/api/admin/events', {method: 'PATCH'}):
+        # any call whose first argument is a URL path. Linked only if a route matches.
+        url = _js_url(args.named_children[0])
+        if url is None or not url.startswith("/") or url.count("/") < 2:
+            return None
+        method = "?"
+        if len(args.named_children) > 1 and args.named_children[1].type == "object":
+            for pair in args.named_children[1].named_children:
+                if pair.type == "pair" and _text(pair.child_by_field_name("key")).strip("'\"") == "method":
+                    method = "?" + ((_string_value(pair.child_by_field_name("value")) or "").upper())
+        return CallSite(name=url, receiver=method, kind="requests")
+    url = _js_url(args.named_children[0])
+    if url is None:
+        return None
+    return CallSite(name=url, receiver=method, kind="requests")
 
 
 def _js_make_func(name: str, span: Node, fn: Node, in_class: bool, out: list[Definition], tags: list[str]) -> None:
@@ -527,11 +646,52 @@ def _string_value(node: Optional[Node]) -> Optional[str]:
     return None
 
 
+def _wrapper_body(stmt: Node) -> Optional[Node]:
+    """The body of a top-level wrapper that only scopes code: an IIFE like
+    (() => { ... })() or !function(){ ... }(), a DOMContentLoaded/load
+    listener, or jQuery's $(function(){ ... }). Code inside counts as top level."""
+    if stmt.type != "expression_statement" or not stmt.named_children:
+        return None
+    e = stmt.named_children[0]
+    while e.type in ("parenthesized_expression", "unary_expression") and e.named_children:
+        e = e.named_children[-1]
+    if e.type != "call_expression":
+        return None
+    fn = e.child_by_field_name("function")
+    while fn is not None and fn.type == "parenthesized_expression" and fn.named_children:
+        fn = fn.named_children[0]
+    func = None
+    if fn is not None and fn.type in ("arrow_function", "function_expression", "function"):
+        func = fn  # IIFE
+    else:
+        args = e.child_by_field_name("arguments")
+        a = args.named_children if args is not None else []
+        name = _text(fn)
+        if name.endswith("addEventListener") and len(a) >= 2 and _string_value(a[0]) in ("DOMContentLoaded", "load"):
+            func = a[1]
+        elif name in ("$", "jQuery") and len(a) == 1:
+            func = a[0]
+    if func is None or func.type not in ("arrow_function", "function_expression", "function"):
+        return None
+    body = func.child_by_field_name("body")
+    return body if body is not None and body.type == "statement_block" else None
+
+
 def parse_js(src: bytes, lang: str) -> FileParse:
     tree = parse_bytes(lang, src)
     root = tree.root_node
     fp = FileParse(language=lang, has_error=root.has_error, line_count=src.count(b"\n") + 1)
-    _js_defs(root, False, fp.definitions, [], fp)
+    # top-level scopes: the file, plus the bodies of wrappers like IIFEs
+    scopes = [root]
+    i = 0
+    while i < len(scopes):
+        for n in scopes[i].children:
+            body = _wrapper_body(n)
+            if body is not None:
+                scopes.append(body)
+        i += 1
+    for sc in scopes:
+        _js_defs(sc, False, fp.definitions, [], fp)
     for n in root.children:
         if n.type == "import_statement":
             source = _string_value(n.child_by_field_name("source"))
@@ -588,7 +748,9 @@ def parse_js(src: bytes, lang: str) -> FileParse:
                         certainty="sure" if _text(fn) == "require" else "maybe",
                     ))
         stack.extend(n.children)
-    for n in root.children:
+    for n in (c for sc in scopes for c in sc.children):
+        if _wrapper_body(n) is not None:
+            continue
         if n.type in ("function_declaration", "class_declaration", "import_statement", "export_statement",
                       "lexical_declaration", "variable_declaration", "interface_declaration", "type_alias_declaration"):
             if n.type in ("lexical_declaration", "variable_declaration"):

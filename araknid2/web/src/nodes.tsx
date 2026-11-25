@@ -13,6 +13,8 @@ export interface CanvasActions {
   drill: (b: Block) => void;
   showAll: (ownerId: string) => void;
   drillInside: (b: InsideBlock) => void;
+  /** One-block-at-a-time mode: the block opened in place, if any. */
+  expanded: string | null;
 }
 
 export const Actions = createContext<CanvasActions | null>(null);
@@ -54,6 +56,7 @@ export const CardNode = memo(({ data }: NodeProps) => {
   const b = c.block!;
   const timer = useRef<number | null>(null);
   const canOpen = b.kind !== "asset" && (b.children.length > 0 || ["function", "method", "component"].includes(b.kind));
+  const plain = b.summary ?? `${KIND_LABEL[b.kind]} · ${b.loc} loc`;
   return (
     <div
       className={`card2 kind-${b.kind}`}
@@ -69,19 +72,26 @@ export const CardNode = memo(({ data }: NodeProps) => {
       }}
       onMouseEnter={() => a.hover(b.id)}
       onMouseLeave={() => a.hover(null)}
-      title={canOpen ? "Click to trace · double-click to open" : "Click to trace"}
+      title={`${b.summary ? b.summary + "\n\n" : ""}${KIND_LABEL[b.kind]} · ${b.loc} loc\nClick to trace${canOpen ? " · double-click to go inside" : ""}`}
     >
       <Handle type="target" position={Position.Left} className="h" isConnectable={false} />
       <span className="card2-icon" aria-hidden>{KIND_ICON[b.kind] ?? "•"}</span>
       <div className="card2-text">
         <div className="card2-title">{c.chain.length > 1 ? displayTitle(c.chain) : humanTitle(b)}</div>
-        <div className="card2-sub">
-          {KIND_LABEL[b.kind]} · {b.loc} loc
+        <div className={`card2-sub ${b.summary ? "plain" : ""}`}>
+          {plain}
           {b.build_state === "partial" && <span className="warn-dot" title="Partially built (stub)"> · stub</span>}
           {b.health && <span className="warn-dot" title="Parse problem"> · ⚠</span>}
         </div>
       </div>
-      {canOpen && <span className="card2-open" aria-hidden>›</span>}
+      {b.children.length > 0 && b.kind !== "asset" && (
+        <button
+          className="card2-open"
+          title="Open: show what's inside"
+          onClick={(e) => { e.stopPropagation(); if (timer.current) clearTimeout(timer.current); a.toggleOpen(b); }}
+          onDoubleClick={(e) => e.stopPropagation()}
+        >›</button>
+      )}
       <Handle type="source" position={Position.Right} className="h" isConnectable={false} />
     </div>
   );
@@ -123,8 +133,11 @@ export const FrameNode = memo(({ data }: NodeProps) => {
       >
         <span className="card2-icon" aria-hidden>{KIND_ICON[g.block.kind] ?? "•"}</span>
         <span className="frame2-title">{displayTitle(g.chain)}</span>
-        <span className="frame2-meta">{g.block.loc} loc</span>
-        <button className="link" onClick={(e) => { e.stopPropagation(); a.drill(g.block); }}>Open ›</button>
+        <span className="frame2-meta" title={g.block.summary ?? undefined}>{g.block.summary ?? `${g.block.loc} loc`}</span>
+        {a.expanded === g.block.id && (
+          <button className="link" onClick={(e) => { e.stopPropagation(); a.toggleOpen(g.block); }}>Close</button>
+        )}
+        <button className="link" onClick={(e) => { e.stopPropagation(); a.drill(g.block); }}>Go inside ›</button>
       </div>
       <Handle type="source" position={Position.Right} className="h" isConnectable={false} />
     </div>

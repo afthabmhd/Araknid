@@ -69,7 +69,15 @@ function addLink(map: Map<string, Link>, s: string, t: string, kind: EdgeKind, c
   l.maybe = l.maybe && maybe;
 }
 
-export function buildLevelView(ix: Index, rootId: string, level: number, f: Filters, showAll: Record<string, boolean>): LevelView {
+export interface OpenMode {
+  /** One block at a time: the canvas shows the current block's children, and
+   *  only the one block in `expanded` opens in place to show what's inside. */
+  one: boolean;
+  expanded: string | null;
+}
+
+export function buildLevelView(ix: Index, rootId: string, level: number, f: Filters, showAll: Record<string, boolean>,
+  open: OpenMode = { one: false, expanded: null }): LevelView {
   const rootChain = collapseChain(ix, ix.get(rootId), f);
   let root = rootChain[rootChain.length - 1];
   if (!visibleChildren(ix, root, f).length) root = ix.get(rootId);
@@ -92,10 +100,12 @@ export function buildLevelView(ix: Index, rootId: string, level: number, f: Filt
 
   const tops = visibleChildren(ix, root, f).map((c) => collapseChain(ix, c, f));
   // Is the slider asking for anything deeper than the current block's children?
-  const deeper = tops.some((ch) => {
-    const last = ch[ch.length - 1];
-    return last.level < level && last.kind !== "class" && visibleChildren(ix, last, f).length > 0;
-  });
+  const deeper = open.one
+    ? tops.some((ch) => ch[ch.length - 1].id === open.expanded && visibleChildren(ix, ch[ch.length - 1], f).length > 0)
+    : tops.some((ch) => {
+      const last = ch[ch.length - 1];
+      return last.level < level && last.kind !== "class" && visibleChildren(ix, last, f).length > 0;
+    });
 
   const addCard = (chain: Block[], group: string | null) => {
     const b = chain[chain.length - 1];
@@ -120,7 +130,9 @@ export function buildLevelView(ix: Index, rootId: string, level: number, f: Filt
     for (const chain of sortedTops) {
       const top = chain[chain.length - 1];
       const inner: Block[] = [];
-      if (top.level < level && top.kind !== "class") atLevel(top, inner);
+      if (open.one) {
+        if (top.id === open.expanded) inner.push(...visibleChildren(ix, top, f));
+      } else if (top.level < level && top.kind !== "class") atLevel(top, inner);
       if (!inner.length || groups.length >= MAX_GROUPS) {
         loose.push(addCard(chain, null));
         continue;

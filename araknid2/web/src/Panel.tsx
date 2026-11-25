@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Badges, CodeLines } from "./nodes";
 import type { Block, Edge, InsideBlock } from "./types";
-import { humanTitle, type Index } from "./view";
+import { EDGE_VERB, humanTitle, type Index } from "./view";
 
 type Tab = "code" | "connections" | "details" | "explain";
 
@@ -64,6 +64,12 @@ export function Panel(props: {
         </div>
         <button className="icon" onClick={props.onClose}>×</button>
       </div>
+      {b.summary && (
+        <p className="panel-summary">
+          {b.summary}
+          <span className="muted small"> {b.summary_by === "author" ? "(from the code's own comment)" : b.summary_by === "ai" ? "(written by AI)" : "(from what the code does)"}</span>
+        </p>
+      )}
       <div className="panel-meta">
         <Badges b={b} />
         <div className="panel-actions">
@@ -137,7 +143,7 @@ function EdgeList({ title, edges, ix, side, onSelect }: {
           if (!other) return null;
           return (
             <li key={i} onClick={() => onSelect(other.id)}>
-              <span className={`badge edge-${e.kind}`}>{e.kind}</span>
+              <span className={`badge edge-${e.kind}`}>{EDGE_VERB[e.kind]}</span>
               <span className="mono">{other.code_name}</span>
               {e.certainty === "maybe" && <span className="badge muted" title="Linked by name only">maybe</span>}
               {e.count > 1 && <span className="muted"> ×{e.count}</span>}

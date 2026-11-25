@@ -5,6 +5,7 @@ Generated and vendored code is hidden using .gitignore plus a built-in list.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 from dataclasses import dataclass
@@ -103,7 +104,38 @@ def walk(root: Path) -> list[FoundFile]:
                 found.append(FoundFile(rel, CODE_EXTENSIONS[ext], size))
             elif ext in ASSET_EXTENSIONS or f in ASSET_NAMES:
                 found.append(FoundFile(rel, None, size))
-    return found
+    return drop_copies(root, found)
+
+
+def drop_copies(root: Path, found: list[FoundFile]) -> list[FoundFile]:
+    """Hide folders that are build copies of other files (e.g. a build step
+    copying pages and scripts into public/). A folder counts as a copy when at
+    least 3 of its files and 80% of them have an identical twin outside it."""
+    digest: dict[str, str] = {}
+    for f in found:
+        try:
+            digest[f.rel] = hashlib.sha1((root / f.rel).read_bytes()).hexdigest()
+        except OSError:
+            pass
+    by_hash: dict[str, set[str]] = {}
+    for rel, h in digest.items():
+        by_hash.setdefault(h, set()).add(rel)
+    dirs: dict[str, list[str]] = {}
+    for f in found:
+        parts = f.rel.split("/")[:-1]
+        for i in range(1, len(parts) + 1):
+            dirs.setdefault("/".join(parts[:i]), []).append(f.rel)
+    dropped: list[str] = []
+    for d in sorted(dirs, key=lambda x: x.count("/")):
+        if any(d.startswith(x + "/") for x in dropped):
+            continue
+        rels = dirs[d]
+        twins = sum(1 for r in rels if r in digest and any(not o.startswith(d + "/") for o in by_hash[digest[r]]))
+        if twins >= 3 and twins >= 0.8 * len(rels):
+            dropped.append(d)
+    if not dropped:
+        return found
+    return [f for f in found if not any(f.rel.startswith(d + "/") for d in dropped)]
 
 
 TEST_FILE_RE = re.compile(
