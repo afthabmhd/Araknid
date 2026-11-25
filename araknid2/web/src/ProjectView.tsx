@@ -113,12 +113,13 @@ function Inner({ graph, onBack, onRemap }: { graph: GraphData; onBack: () => voi
 
   const actions: CanvasActions = useMemo(() => ({
     select: (id) => setSelected(id),
+    trace: (b) => (b.kind === "project" ? setSelected(b.id) : traceBlock(b)),
     hover: (id) => setHovered(id),
     toggleOpen: (b) => drill(b),
     drill,
     showAll: (owner) => setShowAll((s) => ({ ...s, [owner]: true })),
     drillInside,
-  }), [drill, drillInside]);
+  }), [drill, drillInside, traceBlock]);
 
   // ------------------------------------------------------------- level view
   useEffect(() => {
@@ -390,8 +391,8 @@ function Inner({ graph, onBack, onRemap }: { graph: GraphData; onBack: () => voi
               that way.
             </p>
             <p className="hint">
-              Point at a card to see its own connections. Double-click to go inside. <b>Trace</b> in the side panel
-              shows who uses a block and what it uses.
+              Click a card to trace it: who uses it on the left, what it uses on the right. Click any card in a
+              trace to follow it. Point at a card to see its links, and double-click to go inside.
             </p>
           </aside>
           <div className={`canvas ${focusId ? "has-focus" : ""}`}>

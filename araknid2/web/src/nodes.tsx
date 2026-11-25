@@ -6,6 +6,8 @@ import type { Card, Group, Stub } from "./levelview";
 
 export interface CanvasActions {
   select: (id: string) => void;
+  /** Single click on a card: open its trace (Trace first). */
+  trace: (b: Block) => void;
   hover: (id: string | null) => void;
   toggleOpen: (b: Block) => void;
   drill: (b: Block) => void;
@@ -58,7 +60,7 @@ export const CardNode = memo(({ data }: NodeProps) => {
       onClick={(e) => {
         e.stopPropagation();
         if (timer.current) clearTimeout(timer.current);
-        timer.current = window.setTimeout(() => a.select(b.id), 220);
+        timer.current = window.setTimeout(() => a.trace(b), 220);
       }}
       onDoubleClick={(e) => {
         e.stopPropagation();
@@ -67,7 +69,7 @@ export const CardNode = memo(({ data }: NodeProps) => {
       }}
       onMouseEnter={() => a.hover(b.id)}
       onMouseLeave={() => a.hover(null)}
-      title={canOpen ? "Double-click to open" : undefined}
+      title={canOpen ? "Click to trace · double-click to open" : "Click to trace"}
     >
       <Handle type="target" position={Position.Left} className="h" isConnectable={false} />
       <span className="card2-icon" aria-hidden>{KIND_ICON[b.kind] ?? "•"}</span>
